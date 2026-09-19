@@ -5,8 +5,17 @@ import {
 	UserButton,
 } from "@clerk/tanstack-react-start";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { CircleUser, Clock3, Menu, Search, Settings } from "lucide-react";
+import {
+	CircleUser,
+	Clock3,
+	Menu,
+	Moon,
+	Search,
+	Settings,
+	Sun,
+} from "lucide-react";
 import { motion } from "motion/react";
+import { useEffect, useState } from "react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -18,6 +27,37 @@ const links = [
 	{ to: "/leaderboard", label: "Leaders" },
 	{ to: "/impact", label: "Impact" },
 ] as const;
+
+function ThemeToggle({ mobile = false }: { mobile?: boolean }) {
+	const [isDark, setIsDark] = useState(false);
+
+	useEffect(() => {
+		setIsDark(document.documentElement.classList.contains("dark"));
+	}, []);
+
+	function toggleTheme() {
+		const nextIsDark = !document.documentElement.classList.contains("dark");
+		document.documentElement.classList.toggle("dark", nextIsDark);
+		localStorage.setItem("volgo-theme", nextIsDark ? "dark" : "light");
+		setIsDark(nextIsDark);
+	}
+
+	const label = isDark ? "Switch to light mode" : "Switch to dark mode";
+
+	return (
+		<Button
+			size={mobile ? "default" : "icon"}
+			variant="ghost"
+			className={mobile ? "w-full justify-start" : undefined}
+			onClick={toggleTheme}
+			aria-label={label}
+			title={label}
+		>
+			{isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+			{mobile ? <span>{isDark ? "Light mode" : "Dark mode"}</span> : null}
+		</Button>
+	);
+}
 
 export default function Navigation() {
 	const navigate = useNavigate();
@@ -69,6 +109,7 @@ export default function Navigation() {
 
 				<div className="flex items-center justify-end gap-2">
 					<div className="hidden items-center gap-2 md:flex">
+						<ThemeToggle />
 						<Button
 							size="icon"
 							variant="ghost"
@@ -166,6 +207,7 @@ export default function Navigation() {
 									>
 										Search
 									</Link>
+									<ThemeToggle mobile />
 									<Link
 										to="/profile"
 										className={cn(

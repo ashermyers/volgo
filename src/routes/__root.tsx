@@ -48,11 +48,17 @@ export const Route = createRootRoute({
 
 function RootDocument({ children }: { children: React.ReactNode }) {
 	return (
-		<html lang="en">
+		<html lang="en" suppressHydrationWarning>
 			<head>
+				<script
+					// biome-ignore lint/security/noDangerouslySetInnerHtml: Static script prevents a theme flash before React hydrates.
+					dangerouslySetInnerHTML={{
+						__html: `try{const theme=localStorage.getItem("volgo-theme");const dark=theme==="dark"||(!theme&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark)}catch{}`,
+					}}
+				/>
 				<HeadContent />
 			</head>
-			<body className="dark antialiased">
+			<body className="antialiased">
 				<ClerkProvider>
 					{children}
 					<TanStackDevtools
