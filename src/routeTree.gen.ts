@@ -12,7 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DiscoverRouteImport } from './routes/discover'
 import { Route as ImpactRouteImport } from './routes/impact'
+import { Route as LeaderboardRouteImport } from './routes/leaderboard'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as RequestsRouteImport } from './routes/requests'
 import { Route as SearchRouteImport } from './routes/search'
@@ -36,9 +38,19 @@ const ImpactRoute = ImpactRouteImport.update({
   path: '/impact',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LeaderboardRoute = LeaderboardRouteImport.update({
+  id: '/leaderboard',
+  path: '/leaderboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProfileRoute = ProfileRouteImport.update({
@@ -81,7 +93,9 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/discover': typeof DiscoverRoute
   '/impact': typeof ImpactRoute
+  '/leaderboard': typeof LeaderboardRoute
   '/login': typeof LoginRoute
+  '/onboarding': typeof OnboardingRoute
   '/profile': typeof ProfileRoute
   '/requests': typeof RequestsRoute
   '/search': typeof SearchRoute
@@ -94,7 +108,9 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/discover': typeof DiscoverRoute
   '/impact': typeof ImpactRoute
+  '/leaderboard': typeof LeaderboardRoute
   '/login': typeof LoginRoute
+  '/onboarding': typeof OnboardingRoute
   '/profile': typeof ProfileRoute
   '/requests': typeof RequestsRoute
   '/search': typeof SearchRoute
@@ -108,7 +124,9 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/discover': typeof DiscoverRoute
   '/impact': typeof ImpactRoute
+  '/leaderboard': typeof LeaderboardRoute
   '/login': typeof LoginRoute
+  '/onboarding': typeof OnboardingRoute
   '/profile': typeof ProfileRoute
   '/requests': typeof RequestsRoute
   '/search': typeof SearchRoute
@@ -123,7 +141,9 @@ export interface FileRouteTypes {
     | '/'
     | '/discover'
     | '/impact'
+    | '/leaderboard'
     | '/login'
+    | '/onboarding'
     | '/profile'
     | '/requests'
     | '/search'
@@ -136,7 +156,9 @@ export interface FileRouteTypes {
     | '/'
     | '/discover'
     | '/impact'
+    | '/leaderboard'
     | '/login'
+    | '/onboarding'
     | '/profile'
     | '/requests'
     | '/search'
@@ -149,7 +171,9 @@ export interface FileRouteTypes {
     | '/'
     | '/discover'
     | '/impact'
+    | '/leaderboard'
     | '/login'
+    | '/onboarding'
     | '/profile'
     | '/requests'
     | '/search'
@@ -163,7 +187,9 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DiscoverRoute: typeof DiscoverRoute
   ImpactRoute: typeof ImpactRoute
+  LeaderboardRoute: typeof LeaderboardRoute
   LoginRoute: typeof LoginRoute
+  OnboardingRoute: typeof OnboardingRoute
   ProfileRoute: typeof ProfileRoute
   RequestsRoute: typeof RequestsRoute
   SearchRoute: typeof SearchRoute
@@ -196,11 +222,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ImpactRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/leaderboard': {
+      id: '/leaderboard'
+      path: '/leaderboard'
+      fullPath: '/leaderboard'
+      preLoaderRoute: typeof LeaderboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/profile': {
@@ -259,7 +299,9 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DiscoverRoute: DiscoverRoute,
   ImpactRoute: ImpactRoute,
+  LeaderboardRoute: LeaderboardRoute,
   LoginRoute: LoginRoute,
+  OnboardingRoute: OnboardingRoute,
   ProfileRoute: ProfileRoute,
   RequestsRoute: RequestsRoute,
   SearchRoute: SearchRoute,

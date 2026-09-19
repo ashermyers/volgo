@@ -15,7 +15,7 @@ export const Route = createFileRoute("/settings")({
 });
 
 function SettingsPage() {
-	const { isAuthenticated, profile } = Route.useLoaderData();
+	const { isAuthenticated, profile, contact } = Route.useLoaderData();
 
 	return (
 		<AppShell>
@@ -35,13 +35,13 @@ function SettingsPage() {
 					}
 				/>
 
-				{!isAuthenticated || !profile ? (
+				{!isAuthenticated || !profile || !contact ? (
 					<div className="mt-12">
 						<SignInPrompt />
 					</div>
 				) : (
 					<div className="mt-10 rounded-2xl border bg-card p-6">
-						<ProfileForm profile={profile} mode="settings" />
+						<ProfileForm profile={profile} contact={contact} mode="settings" />
 					</div>
 				)}
 			</main>

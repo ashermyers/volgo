@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 const links = [
 	{ to: "/discover", label: "Discover" },
 	{ to: "/requests", label: "Requests" },
+	{ to: "/leaderboard", label: "Leaders" },
 	{ to: "/impact", label: "Impact" },
 ] as const;
 

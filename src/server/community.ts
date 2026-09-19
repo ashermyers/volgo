@@ -3,13 +3,16 @@ import { createServerFn } from "@tanstack/react-start";
 import type { Document, WithId } from "mongodb";
 
 import {
+	type ActiveConnection,
 	type BoardItem,
 	type CommunityPost,
 	expressInterestInputSchema,
 	type IncomingInterest,
+	type LeaderboardEntry,
 	matchActionInputSchema,
 } from "#/features/community/schema";
 import { connectToDatabase, parseObjectId } from "#/lib/db";
+import { confirmExchange } from "#/lib/exchanges";
 import type { IntentKind } from "#/lib/matching";
 import { scoreOpportunity } from "#/lib/matching";
 
@@ -349,6 +352,7 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 				isAuthenticated: false,
 				items: [] as BoardItem[],
 				incoming: [] as IncomingInterest[],
+				connections: [] as ActiveConnection[],
 			};
 		}
 
@@ -391,7 +395,9 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 			if (!post) return [];
 
 			const status =
-				match.status === "accepted" || match.status === "completed"
+				match.status === "accepted" ||
+				match.status === "awaiting_confirmation" ||
+				match.status === "completed"
 					? match.status
 					: "pending";
 
@@ -415,7 +421,11 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 			.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 			.map((post) => {
 				const related = incoming.filter((item) => item.postId === post.id);
-				const accepted = related.find((item) => item.status === "accepted");
+				const accepted = related.find(
+					(item) =>
+						item.status === "accepted" ||
+						item.status === "awaiting_confirmation",
+				);
 				const completed = related.find((item) => item.status === "completed");
 				const partner = completed ?? accepted ?? null;
 
@@ -436,10 +446,92 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 				};
 			});
 
+		const activeMatches = matches.filter(
+			(match) =>
+				match.status === "accepted" ||
+				match.status === "awaiting_confirmation" ||
+				match.status === "completed",
+		);
+		const partnerIds = activeMatches.map((match) =>
+			String(match.fromUserId) === userId
+				? String(match.toUserId)
+				: String(match.fromUserId),
+		);
+		const [activeNames, partnerProfiles, connectionPosts] = await Promise.all([
+			namesFor(partnerIds),
+			database
+				.collection("profiles")
+				.find({ clerkUserId: { $in: partnerIds } })
+				.toArray(),
+			Promise.all(
+				activeMatches.map(async (match) => {
+					const postId = await parseObjectId(String(match.postId));
+					if (!postId) return null;
+					const postType: IntentKind =
+						match.postType === "offer" ? "offer" : "request";
+					return database
+						.collection(collectionFor(postType))
+						.findOne({ _id: postId });
+				}),
+			),
+		]);
+		const profilesById = new Map(
+			partnerProfiles.map((profile) => [String(profile.clerkUserId), profile]),
+		);
+
+		const connections: ActiveConnection[] = activeMatches.flatMap(
+			(match, index) => {
+				const post = connectionPosts[index];
+				if (!post) return [];
+
+				const fromUserId = String(match.fromUserId);
+				const toUserId = String(match.toUserId);
+				const partnerId = fromUserId === userId ? toUserId : fromUserId;
+				const profile = profilesById.get(partnerId);
+				const confirmedBy = asStringArray(match.confirmedBy);
+				const postType: IntentKind =
+					match.postType === "offer" ? "offer" : "request";
+				const providerUserId = postType === "request" ? fromUserId : toUserId;
+
+				return [
+					{
+						id: match._id.toString(),
+						postTitle: String(post.title),
+						postType,
+						partnerName: activeNames.get(partnerId) ?? "Community member",
+						partnerContact: {
+							phone:
+								typeof profile?.contactPhone === "string"
+									? profile.contactPhone
+									: null,
+							email:
+								typeof profile?.contactEmail === "string"
+									? profile.contactEmail
+									: null,
+						},
+						minutes:
+							asNullableNumber(post.availableMinutes) ??
+							asNullableNumber(post.estimatedMinutes) ??
+							60,
+						status:
+							match.status === "completed"
+								? "completed"
+								: match.status === "awaiting_confirmation"
+									? "awaiting_confirmation"
+									: "accepted",
+						youConfirmed: confirmedBy.includes(userId),
+						partnerConfirmed: confirmedBy.includes(partnerId),
+						role: providerUserId === userId ? "provider" : "recipient",
+					},
+				];
+			},
+		);
+
 		return {
 			isAuthenticated: true,
 			items,
 			incoming: incoming.filter((item) => item.status === "pending"),
+			connections,
 		};
 	},
 );
@@ -491,12 +583,17 @@ export const acceptMatchFn = createServerFn({ method: "POST" })
 
 		const now = new Date();
 
-		await database
-			.collection("matches")
-			.updateOne(
-				{ _id: match._id },
-				{ $set: { status: "accepted", updatedAt: now } },
-			);
+		await database.collection("matches").updateOne(
+			{ _id: match._id },
+			{
+				$set: {
+					status: "accepted",
+					confirmedBy: [],
+					acceptedAt: now,
+					updatedAt: now,
+				},
+			},
+		);
 		await database
 			.collection(collectionFor(postType))
 			.updateOne(
@@ -522,75 +619,7 @@ export const completeMatchFn = createServerFn({ method: "POST" })
 		}
 
 		const database = await connectToDatabase();
-		const match = await database
-			.collection("matches")
-			.findOne({ _id: matchId });
-
-		if (
-			!match ||
-			(String(match.toUserId) !== userId && String(match.fromUserId) !== userId)
-		) {
-			throw new Error("That match could not be found");
-		}
-
-		if (match.status === "completed") {
-			return { id: match._id.toString(), status: "completed" };
-		}
-
-		if (match.status !== "accepted") {
-			throw new Error("Accept this match before marking it complete");
-		}
-
-		const postType: IntentKind =
-			match.postType === "offer" ? "offer" : "request";
-		const postId = await parseObjectId(String(match.postId));
-		if (!postId) {
-			throw new Error("That post could not be found");
-		}
-		const post = await database
-			.collection(collectionFor(postType))
-			.findOne({ _id: postId });
-
-		if (!post) {
-			throw new Error("That post could not be found");
-		}
-
-		const minutes =
-			asNullableNumber(post.availableMinutes) ??
-			asNullableNumber(post.estimatedMinutes) ??
-			60;
-		const providerUserId =
-			postType === "request"
-				? String(match.fromUserId)
-				: String(match.toUserId);
-		const recipientUserId =
-			postType === "request"
-				? String(match.toUserId)
-				: String(match.fromUserId);
-		const now = new Date();
-
-		await database
-			.collection("matches")
-			.updateOne(
-				{ _id: match._id },
-				{ $set: { status: "completed", updatedAt: now } },
-			);
-		await database
-			.collection(collectionFor(postType))
-			.updateOne(
-				{ _id: post._id },
-				{ $set: { status: "completed", updatedAt: now } },
-			);
-		await database.collection("exchanges").insertOne({
-			matchId: match._id.toString(),
-			providerUserId,
-			recipientUserId,
-			minutes,
-			status: "completed",
-			createdAt: now,
-		});
-
-		return { id: match._id.toString(), status: "completed" };
+		return confirmExchange({ database, matchId, userId });
 	});
 
 export const getImpactFn = createServerFn({ method: "GET" }).handler(
@@ -603,6 +632,8 @@ export const getImpactFn = createServerFn({ method: "GET" }).handler(
 				posts: 0,
 				peopleReached: 0,
 				minutesPledged: 0,
+				verifiedMinutes: 0,
+				availableCredits: 0,
 				skills: [] as string[],
 				recent: [] as Array<{
 					id: string;
@@ -619,7 +650,7 @@ export const getImpactFn = createServerFn({ method: "GET" }).handler(
 		}
 
 		const database = await connectToDatabase();
-		const [offers, requests, matches] = await Promise.all([
+		const [offers, requests, matches, exchanges, profile] = await Promise.all([
 			database
 				.collection("offers")
 				.find({ userId })
@@ -634,6 +665,15 @@ export const getImpactFn = createServerFn({ method: "GET" }).handler(
 				.collection("matches")
 				.find({ $or: [{ fromUserId: userId }, { toUserId: userId }] })
 				.toArray(),
+			database
+				.collection("exchanges")
+				.find({
+					status: "completed",
+					verifiedByBoth: true,
+					$or: [{ providerUserId: userId }, { recipientUserId: userId }],
+				})
+				.toArray(),
+			database.collection("profiles").findOne({ clerkUserId: userId }),
 		]);
 
 		const people = new Set<string>();
@@ -664,17 +704,89 @@ export const getImpactFn = createServerFn({ method: "GET" }).handler(
 				0;
 			return total + minutes;
 		}, 0);
+		const verifiedMinutes = exchanges.reduce(
+			(total, exchange) =>
+				total + (typeof exchange.minutes === "number" ? exchange.minutes : 0),
+			0,
+		);
 
 		return {
 			isAuthenticated: true,
 			posts: offers.length + requests.length,
 			peopleReached: people.size,
 			minutesPledged,
+			verifiedMinutes,
+			availableCredits:
+				typeof profile?.availableCredits === "number"
+					? profile.availableCredits
+					: 0,
 			skills: uniqueSkills([
 				...offers.flatMap((offer) => asStringArray(offer.skills)),
 				...requests.flatMap((request) => asStringArray(request.skillsNeeded)),
 			]).slice(0, 12),
 			recent,
 		};
+	},
+);
+
+export const getLeaderboardFn = createServerFn({ method: "GET" }).handler(
+	async () => {
+		const database = await connectToDatabase();
+		const totals = await database
+			.collection("exchanges")
+			.aggregate<{
+				_id: string;
+				verifiedMinutes: number;
+				exchanges: number;
+			}>([
+				{ $match: { status: "completed", verifiedByBoth: true } },
+				{
+					$group: {
+						_id: "$providerUserId",
+						verifiedMinutes: { $sum: "$minutes" },
+						exchanges: { $sum: 1 },
+					},
+				},
+				{ $sort: { verifiedMinutes: -1, exchanges: -1 } },
+				{ $limit: 25 },
+			])
+			.toArray();
+
+		const userIds = totals.map((item) => String(item._id)).filter(Boolean);
+		if (userIds.length === 0) return { entries: [] as LeaderboardEntry[] };
+
+		const [profiles, names] = await Promise.all([
+			database
+				.collection("profiles")
+				.find({ clerkUserId: { $in: userIds } })
+				.toArray(),
+			namesFor(userIds),
+		]);
+		const profilesById = new Map(
+			profiles.map((profile) => [String(profile.clerkUserId), profile]),
+		);
+
+		const visible = totals.filter((item) => {
+			const profile = profilesById.get(String(item._id));
+			return profile?.discoverable !== false;
+		});
+		const entries: LeaderboardEntry[] = visible.map((item, index) => {
+			const userId = String(item._id);
+			const profile = profilesById.get(userId);
+			return {
+				rank: index + 1,
+				userId,
+				displayName:
+					(typeof profile?.displayName === "string" &&
+					profile.displayName.trim()
+						? profile.displayName
+						: names.get(userId)) ?? "Community member",
+				verifiedMinutes: Math.max(1, Math.round(item.verifiedMinutes)),
+				exchanges: Math.max(1, Math.round(item.exchanges)),
+				skills: uniqueSkills(asStringArray(profile?.skills)).slice(0, 4),
+			};
+		});
+
+		return { entries };
 	},
 );

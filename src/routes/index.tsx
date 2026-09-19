@@ -218,6 +218,41 @@ function OrganizingCard({ note }: { note: string }) {
 	);
 }
 
+function QuestionLoadingCard() {
+	return (
+		<motion.section
+			layoutId="intent-panel"
+			initial={{ opacity: 0, y: 12 }}
+			animate={{ opacity: 1, y: 0 }}
+			exit={{ opacity: 0, y: 8 }}
+			className="overflow-hidden rounded-2xl border bg-card shadow-md shadow-foreground/5"
+			aria-live="polite"
+		>
+			<div className="flex items-center gap-3 border-b px-5 py-4">
+				<div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+					<MessageCircleQuestion className="size-4 animate-pulse" />
+				</div>
+				<div>
+					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+						Making this easier to match
+					</p>
+					<p className="text-sm font-medium">
+						Preparing a few follow-up questions…
+					</p>
+				</div>
+			</div>
+			<div className="space-y-3 p-5">
+				<div className="rounded-xl border bg-muted/30 p-4">
+					<Skeleton className="h-3 w-4/5" />
+				</div>
+				<div className="rounded-xl border bg-muted/30 p-4">
+					<Skeleton className="h-3 w-2/3" />
+				</div>
+			</div>
+		</motion.section>
+	);
+}
+
 function ClarifyingCard({
 	note,
 	questions,
@@ -357,7 +392,80 @@ function PulseList({ items }: { items: CommunityPost[] }) {
 	);
 }
 
+type IntentMode = "request" | "offer";
+
+function IntentModePicker({
+	value,
+	onChange,
+	disabled,
+}: {
+	value: IntentMode;
+	onChange: (value: IntentMode) => void;
+	disabled: boolean;
+}) {
+	const options: Array<{
+		value: IntentMode;
+		title: string;
+		description: string;
+		icon: ReactNode;
+	}> = [
+		{
+			value: "request",
+			title: "I need help",
+			description: "Ask the community for a hand",
+			icon: <HelpingHand className="size-5" />,
+		},
+		{
+			value: "offer",
+			title: "I want to help",
+			description: "Share time or a skill",
+			icon: <HandHeart className="size-5" />,
+		},
+	];
+
+	return (
+		<div
+			className="mb-4 grid grid-cols-2 gap-3"
+			role="group"
+			aria-label="Choose a post type"
+		>
+			{options.map((option) => {
+				const selected = value === option.value;
+				return (
+					<button
+						key={option.value}
+						type="button"
+						disabled={disabled}
+						onClick={() => onChange(option.value)}
+						className={`rounded-2xl border p-4 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+							selected
+								? "border-primary bg-primary/8 shadow-sm"
+								: "bg-card hover:bg-muted/40"
+						}`}
+						aria-pressed={selected}
+					>
+						<div
+							className={`mb-3 flex size-9 items-center justify-center rounded-xl ${
+								selected
+									? "bg-primary text-primary-foreground"
+									: "bg-muted text-muted-foreground"
+							}`}
+						>
+							{option.icon}
+						</div>
+						<p className="text-sm font-semibold">{option.title}</p>
+						<p className="mt-1 text-xs text-muted-foreground">
+							{option.description}
+						</p>
+					</button>
+				);
+			})}
+		</div>
+	);
+}
+
 function Home() {
+	const [intentMode, setIntentMode] = useState<IntentMode>("request");
 	const [prompt, setPrompt] = useState("");
 	const [history, setHistory] = useState<ConversationMessage[]>([]);
 	const [clarifying, setClarifying] = useState<{
@@ -368,6 +476,7 @@ function Home() {
 	const [published, setPublished] = useState<CapturedIntent | null>(null);
 	const [workingNote, setWorkingNote] = useState("");
 	const [isAnalyzing, setIsAnalyzing] = useState(false);
+	const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const analysisVersion = useRef(0);
@@ -378,24 +487,23 @@ function Home() {
 		const version = ++analysisVersion.current;
 		setError(null);
 		setDraft(null);
+		setIsAnalyzing(true);
+		setWorkingNote("");
 
 		const optimistic = localAnalyzeIntent(messages, force);
 		if (optimistic.status === "clarify") {
-			setClarifying({
-				note: optimistic.note,
-				questions: optimistic.questions,
-			});
-			setIsAnalyzing(false);
+			setClarifying(null);
+			setIsLoadingQuestions(true);
 		} else {
 			setClarifying(null);
-			setIsAnalyzing(true);
-			setWorkingNote("");
+			setIsLoadingQuestions(false);
 		}
 
 		try {
 			const result = await analyzeIntentFn({ data: { messages, force } });
 			if (version !== analysisVersion.current) return;
 
+			setIsLoadingQuestions(false);
 			setWorkingNote(result.note);
 			setHistory([...messages, { role: "assistant", content: result.note }]);
 
@@ -412,6 +520,7 @@ function Home() {
 		} catch (caughtError) {
 			if (version !== analysisVersion.current) return;
 
+			setIsLoadingQuestions(false);
 			if (optimistic.status === "ready" && optimistic.intent) {
 				setDraft(optimistic.intent);
 				return;
@@ -444,9 +553,15 @@ function Home() {
 		if (!value || isAnalyzing || published) return;
 
 		setPrompt("");
+		const contextualValue =
+			history.length === 0
+				? intentMode === "request"
+					? `I need help with: ${value}`
+					: `I can offer help with: ${value}`
+				: value;
 		const messages: ConversationMessage[] = [
 			...history,
-			{ role: "user", content: value },
+			{ role: "user", content: contextualValue },
 		];
 		setHistory(messages);
 		await analyze(messages);
@@ -493,6 +608,7 @@ function Home() {
 		setClarifying(null);
 		setHistory([]);
 		setWorkingNote("");
+		setIsLoadingQuestions(false);
 		setError(null);
 	}
 
@@ -514,15 +630,26 @@ function Home() {
 						</div>
 
 						<h1 className="font-heading text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
-							{state.firstName
-								? `How can we help, ${state.firstName}?`
-								: "How can we help?"}
+							{intentMode === "request"
+								? state.firstName
+									? `What do you need, ${state.firstName}?`
+									: "What do you need help with?"
+								: state.firstName
+									? `How would you like to help, ${state.firstName}?`
+									: "How would you like to help?"}
 						</h1>
 						<p className="mx-auto mt-3 max-w-xl text-base text-muted-foreground">
-							Tell us what you need, or how you’d like to help someone else.
-							We’ll organize the details.
+							{intentMode === "request"
+								? "Describe what would make things easier. We’ll turn it into a clear request."
+								: "Share a skill or some time. We’ll turn it into an offer people can find."}
 						</p>
 					</motion.div>
+
+					<IntentModePicker
+						value={intentMode}
+						onChange={setIntentMode}
+						disabled={history.length > 0 || isWorking || Boolean(published)}
+					/>
 
 					<div className="rounded-2xl border bg-card p-2 shadow-md shadow-foreground/5 transition-shadow focus-within:shadow-lg">
 						<Textarea
@@ -537,19 +664,29 @@ function Home() {
 							placeholder={
 								clarifying
 									? "Answer in your own words…"
-									: "I need help moving a desk this afternoon…"
+									: intentMode === "request"
+										? "I need help moving a desk this afternoon…"
+										: "I can tutor calculus on Saturday morning…"
 							}
 							className="min-h-28 resize-none border-0 bg-transparent px-4 py-3 text-base shadow-none focus-visible:ring-0"
-							aria-label="Describe what you need or how you can help"
+							aria-label={
+								intentMode === "request"
+									? "Describe the help you need"
+									: "Describe the help you can offer"
+							}
 							disabled={Boolean(published)}
 						/>
 
 						<div className="flex items-center justify-between px-2 pb-1">
 							<div className="flex items-center gap-2 text-xs text-muted-foreground">
 								<Sparkles className="size-3.5" />
-								{clarifying
-									? "Answer below, then send"
-									: "VOLGO understands the details"}
+								{isLoadingQuestions
+									? "Preparing the right questions"
+									: clarifying
+										? "Answer below, then send"
+										: intentMode === "request"
+											? "This will become a request"
+											: "This will become an offer"}
 							</div>
 
 							<Button
@@ -571,36 +708,59 @@ function Home() {
 							transition={{ delay: 0.15 }}
 							className="mt-4 flex flex-wrap justify-center gap-2"
 						>
-							<Suggestion
-								onClick={() => void submitPrompt("I want to help someone.")}
-							>
-								I want to help
-							</Suggestion>
-							<Suggestion
-								onClick={() =>
-									void submitPrompt("I need help with something this week.")
-								}
-							>
-								I need help
-							</Suggestion>
-							<Suggestion
-								onClick={() =>
-									void submitPrompt(
-										"I can help someone with Java or Linux for about two hours Saturday afternoon.",
-									)
-								}
-							>
-								Offer programming help
-							</Suggestion>
-							<Suggestion
-								onClick={() =>
-									void submitPrompt(
-										"I need someone to help me move a desk this afternoon.",
-									)
-								}
-							>
-								Help me move
-							</Suggestion>
+							{intentMode === "request" ? (
+								<>
+									<Suggestion
+										onClick={() => void submitPrompt("something this week")}
+									>
+										I’m not sure where to start
+									</Suggestion>
+									<Suggestion
+										onClick={() =>
+											void submitPrompt(
+												"moving a desk this afternoon for about 30 minutes",
+											)
+										}
+									>
+										Help me move
+									</Suggestion>
+									<Suggestion
+										onClick={() =>
+											void submitPrompt("studying for calculus this weekend")
+										}
+									>
+										Study help
+									</Suggestion>
+								</>
+							) : (
+								<>
+									<Suggestion
+										onClick={() =>
+											void submitPrompt("someone, but I’m not sure how yet")
+										}
+									>
+										I’m open to helping
+									</Suggestion>
+									<Suggestion
+										onClick={() =>
+											void submitPrompt(
+												"Java or Linux for two hours Saturday afternoon",
+											)
+										}
+									>
+										Programming help
+									</Suggestion>
+									<Suggestion
+										onClick={() =>
+											void submitPrompt(
+												"with moving or lifting for an hour this week",
+											)
+										}
+									>
+										Moving help
+									</Suggestion>
+								</>
+							)}
 						</motion.div>
 					) : null}
 
@@ -631,6 +791,10 @@ function Home() {
 									onReset={resetDraft}
 									onPublish={() => void publishIntent()}
 								/>
+							</div>
+						) : isLoadingQuestions ? (
+							<div className="mt-6" key="question-loading">
+								<QuestionLoadingCard />
 							</div>
 						) : clarifying && !isWorking ? (
 							<div className="mt-6" key="clarify">

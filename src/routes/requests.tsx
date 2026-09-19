@@ -1,5 +1,13 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { Check, Plus, Sparkles } from "lucide-react";
+import {
+	Check,
+	Clock3,
+	Mail,
+	Phone,
+	Plus,
+	ShieldCheck,
+	Sparkles,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMemo, useState } from "react";
 
@@ -13,7 +21,11 @@ import PageHeader from "#/components/page-header";
 import PagePending from "#/components/page-pending";
 import SegmentedControl from "#/components/segmented-control";
 import { Button } from "#/components/ui/button";
-import type { BoardItem, IncomingInterest } from "#/features/community/schema";
+import type {
+	ActiveConnection,
+	BoardItem,
+	IncomingInterest,
+} from "#/features/community/schema";
 import {
 	acceptMatchFn,
 	completeMatchFn,
@@ -36,13 +48,13 @@ const filterLabels: Array<{ value: Filter; label: string }> = [
 ];
 
 function RequestsPage() {
-	const { isAuthenticated, items, incoming } = Route.useLoaderData();
+	const { isAuthenticated, items, incoming, connections } =
+		Route.useLoaderData();
 	const router = useRouter();
 	const [filter, setFilter] = useState<Filter>("all");
 	const [busyId, setBusyId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [acceptedIds, setAcceptedIds] = useState<Set<string>>(new Set());
-	const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
 
 	const visibleIncoming = useMemo(
 		() => incoming.filter((item) => !acceptedIds.has(item.id)),
@@ -85,17 +97,16 @@ function RequestsPage() {
 		}
 	}
 
-	async function complete(item: BoardItem) {
-		if (!item.acceptedMatchId || busyId) return;
+	async function complete(connection: ActiveConnection) {
+		if (busyId) return;
 		setError(null);
-		setBusyId(item.acceptedMatchId);
+		setBusyId(connection.id);
 
 		try {
-			await completeMatchFn({ data: { matchId: item.acceptedMatchId } });
-			setCompletedIds((current) => new Set(current).add(item.id));
+			await completeMatchFn({ data: { matchId: connection.id } });
 			await router.invalidate();
 		} catch {
-			setError("We couldn't mark that complete yet. Please try again.");
+			setError("We couldn't confirm those hours yet. Please try again.");
 		} finally {
 			setBusyId(null);
 		}
@@ -153,6 +164,25 @@ function RequestsPage() {
 							</section>
 						) : null}
 
+						{connections.length > 0 ? (
+							<section className="mt-10">
+								<div className="mb-4 flex items-center gap-2 text-sm font-medium">
+									<ShieldCheck className="size-4 text-primary" />
+									Accepted matches
+								</div>
+								<div className="grid gap-4 md:grid-cols-2">
+									{connections.map((connection) => (
+										<ConnectionCard
+											key={connection.id}
+											connection={connection}
+											busy={busyId === connection.id}
+											onConfirm={() => void complete(connection)}
+										/>
+									))}
+								</div>
+							</section>
+						) : null}
+
 						<div className="mt-10">
 							<SegmentedControl
 								layoutId="requests-filter"
@@ -166,8 +196,7 @@ function RequestsPage() {
 							<div className="mt-6 grid gap-4 md:grid-cols-2">
 								<AnimatePresence mode="popLayout">
 									{filteredItems.map((item, index) => {
-										const done =
-											item.status === "completed" || completedIds.has(item.id);
+										const done = item.status === "completed";
 										const matched =
 											item.status === "matched" ||
 											Boolean(item.acceptedMatchId);
@@ -199,16 +228,6 @@ function RequestsPage() {
 															<p className="text-xs text-muted-foreground">
 																Matched with {item.partnerName}
 															</p>
-														) : null}
-														{matched && !done && item.acceptedMatchId ? (
-															<Button
-																className="w-full gap-2"
-																disabled={busyId === item.acceptedMatchId}
-																onClick={() => void complete(item)}
-															>
-																<Check className="size-4" />
-																Mark complete
-															</Button>
 														) : null}
 														{!done ? (
 															<DeletePostButton
@@ -254,6 +273,112 @@ function RequestsPage() {
 				)}
 			</main>
 		</AppShell>
+	);
+}
+
+function ConnectionCard({
+	connection,
+	busy,
+	onConfirm,
+}: {
+	connection: ActiveConnection;
+	busy: boolean;
+	onConfirm: () => void;
+}) {
+	const completed = connection.status === "completed";
+	const verifiedByBoth =
+		completed && connection.youConfirmed && connection.partnerConfirmed;
+
+	return (
+		<motion.article layout className="rounded-2xl border bg-card p-5 shadow-sm">
+			<div className="flex items-start justify-between gap-4">
+				<div>
+					<p className="text-xs font-medium uppercase tracking-wider text-primary">
+						{connection.role === "provider"
+							? "You’re providing help"
+							: "You’re receiving help"}
+					</p>
+					<h2 className="mt-1 text-base font-semibold">
+						{connection.postTitle}
+					</h2>
+					<p className="mt-1 text-sm text-muted-foreground">
+						With {connection.partnerName}
+					</p>
+				</div>
+				<div className="flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+					<Clock3 className="size-3.5" />
+					{connection.minutes} min
+				</div>
+			</div>
+
+			<div className="mt-4 rounded-xl border bg-muted/30 p-3">
+				<p className="mb-2 text-xs font-medium text-muted-foreground">
+					Contact shared after acceptance
+				</p>
+				<div className="flex flex-wrap gap-2">
+					{connection.partnerContact.phone ? (
+						<a
+							href={`tel:${connection.partnerContact.phone}`}
+							className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm transition-colors hover:bg-muted"
+						>
+							<Phone className="size-4 text-primary" />
+							{connection.partnerContact.phone}
+						</a>
+					) : null}
+					{connection.partnerContact.email ? (
+						<a
+							href={`mailto:${connection.partnerContact.email}`}
+							className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm transition-colors hover:bg-muted"
+						>
+							<Mail className="size-4 text-primary" />
+							{connection.partnerContact.email}
+						</a>
+					) : null}
+					{!connection.partnerContact.phone &&
+					!connection.partnerContact.email ? (
+						<p className="text-sm text-muted-foreground">
+							{connection.partnerName} hasn’t added contact details yet.
+						</p>
+					) : null}
+				</div>
+			</div>
+
+			<div className="mt-4">
+				{verifiedByBoth ? (
+					<div className="flex items-center gap-2 text-sm font-medium text-primary">
+						<Check className="size-4" />
+						Both people verified these hours
+					</div>
+				) : completed ? (
+					<div className="flex items-center gap-2 text-sm text-muted-foreground">
+						<Clock3 className="size-4" />
+						Completed before two-sided verification
+					</div>
+				) : connection.youConfirmed ? (
+					<div className="rounded-xl bg-muted px-3 py-2 text-sm text-muted-foreground">
+						You confirmed the time. Waiting for {connection.partnerName}.
+					</div>
+				) : (
+					<>
+						{connection.partnerConfirmed ? (
+							<p className="mb-2 text-xs text-muted-foreground">
+								{connection.partnerName} already confirmed.
+							</p>
+						) : null}
+						<Button
+							className="w-full gap-2"
+							disabled={busy}
+							onClick={onConfirm}
+						>
+							<Check className="size-4" />
+							{busy
+								? "Confirming…"
+								: `Confirm ${connection.minutes} minutes completed`}
+						</Button>
+					</>
+				)}
+			</div>
+		</motion.article>
 	);
 }
 

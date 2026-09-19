@@ -1,12 +1,28 @@
 import { TanStackDevtools } from "@tanstack/react-devtools";
-import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
+import {
+	createRootRoute,
+	HeadContent,
+	redirect,
+	Scripts,
+} from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
+
+import { getOnboardingStatusFn } from "#/server/profiles";
 
 import ClerkProvider from "../integrations/clerk/provider";
 
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
+	beforeLoad: async ({ location }) => {
+		const publicPaths = ["/login", "/signup", "/sso-callback", "/onboarding"];
+		if (publicPaths.includes(location.pathname)) return;
+
+		const status = await getOnboardingStatusFn();
+		if (status.isAuthenticated && !status.completed) {
+			throw redirect({ to: "/onboarding" });
+		}
+	},
 	head: () => ({
 		meta: [
 			{

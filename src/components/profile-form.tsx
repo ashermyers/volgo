@@ -12,9 +12,11 @@ import { updateProfileFn } from "#/server/profiles";
 
 export default function ProfileForm({
 	profile,
+	contact,
 	mode,
 }: {
 	profile: UserProfile;
+	contact: { phone: string; email: string };
 	mode: "profile" | "settings";
 }) {
 	const [displayName, setDisplayName] = useState(profile.displayName);
@@ -27,6 +29,8 @@ export default function ProfileForm({
 	const [notifyOnInterest, setNotifyOnInterest] = useState(
 		profile.notifyOnInterest,
 	);
+	const [phone, setPhone] = useState(contact.phone);
+	const [email, setEmail] = useState(contact.email);
 	const [saving, setSaving] = useState(false);
 	const [saved, setSaved] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -47,6 +51,8 @@ export default function ProfileForm({
 					campusArea,
 					discoverable,
 					notifyOnInterest,
+					phone,
+					email,
 				},
 			});
 			setSaved(true);
@@ -116,6 +122,37 @@ export default function ProfileForm({
 					placeholder="Newman, Slusher, downtown…"
 				/>
 			</div>
+
+			{mode === "settings" ? (
+				<div className="rounded-2xl border bg-card p-4">
+					<p className="text-sm font-medium">Private contact details</p>
+					<p className="mt-1 text-xs text-muted-foreground">
+						Only people in an accepted match can see these.
+					</p>
+					<div className="mt-4 grid gap-4 sm:grid-cols-2">
+						<div className="space-y-2">
+							<Label htmlFor="contactPhone">Phone</Label>
+							<Input
+								id="contactPhone"
+								type="tel"
+								value={phone}
+								onChange={(event) => setPhone(event.target.value)}
+								autoComplete="tel"
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="contactEmail">Email</Label>
+							<Input
+								id="contactEmail"
+								type="email"
+								value={email}
+								onChange={(event) => setEmail(event.target.value)}
+								autoComplete="email"
+							/>
+						</div>
+					</div>
+				</div>
+			) : null}
 
 			<div className="rounded-2xl border bg-card p-4">
 				<div className="flex items-center justify-between gap-4">

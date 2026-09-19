@@ -1,10 +1,15 @@
 import { auth, clerkClient } from "@clerk/tanstack-react-start/server";
+import { chat } from "@tanstack/ai";
+import { createGeminiChat } from "@tanstack/ai-gemini";
 import { createServerFn } from "@tanstack/react-start";
 import type { Document, WithId } from "mongodb";
 
 import type { CommunityPost } from "#/features/community/schema";
 import {
+	onboardingInputSchema,
 	type PublicProfile,
+	resumeSummarySchema,
+	resumeUploadInputSchema,
 	searchCommunityInputSchema,
 	type UserProfile,
 	updateProfileInputSchema,
@@ -33,6 +38,21 @@ function unique(values: string[]) {
 
 function escapeRegex(value: string) {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const RESUME_SYSTEM_PROMPT = `You turn a resume into a concise VOLGO community profile.
+
+Return:
+- bio: 2-3 warm, first-person sentences (maximum 400 characters) focused on how the person can help others.
+- skills: up to 12 short, concrete skills explicitly supported by the resume.
+- interests: up to 8 broad service or project interests reasonably supported by the resume.
+
+Do not include phone numbers, email addresses, street addresses, GPA, student IDs, employer contact details, or other sensitive data. Do not invent credentials or experience. Avoid corporate jargon.`;
+
+function getResumeGeminiAdapter() {
+	const apiKey = process.env.GEMINI_API_KEY;
+	if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
+	return createGeminiChat("gemini-3.1-pro-preview", apiKey);
 }
 
 function emptyProfile(userId: string, displayName: string): UserProfile {
@@ -151,7 +171,11 @@ export const getMyProfileFn = createServerFn({ method: "GET" }).handler(
 		const { isAuthenticated, userId } = await auth();
 
 		if (!isAuthenticated || !userId) {
-			return { isAuthenticated: false, profile: null as UserProfile | null };
+			return {
+				isAuthenticated: false,
+				profile: null as UserProfile | null,
+				contact: null as { phone: string; email: string } | null,
+			};
 		}
 
 		const database = await connectToDatabase();
@@ -163,9 +187,201 @@ export const getMyProfileFn = createServerFn({ method: "GET" }).handler(
 		return {
 			isAuthenticated: true,
 			profile: mapProfile(document, userId, displayName),
+			contact: {
+				phone:
+					typeof document?.contactPhone === "string"
+						? document.contactPhone
+						: "",
+				email:
+					typeof document?.contactEmail === "string"
+						? document.contactEmail
+						: "",
+			},
 		};
 	},
 );
+
+export const summarizeResumeFn = createServerFn({ method: "POST" })
+	.validator(resumeUploadInputSchema)
+	.handler(async ({ data }) => {
+		const userId = await requireUserId();
+
+		const bytes = new Uint8Array(Buffer.from(data.base64, "base64"));
+		if (bytes.byteLength > 5_000_000) {
+			throw new Error("Resume files must be 5 MB or smaller");
+		}
+
+		let resumeText = "";
+		if (data.mimeType === "application/pdf") {
+			const { extractText } = await import("unpdf");
+			const extracted = await extractText(bytes, { mergePages: true });
+			resumeText = extracted.text;
+		} else {
+			resumeText = new TextDecoder().decode(bytes);
+		}
+
+		const normalizedText = resumeText
+			.split("\u0000")
+			.join("")
+			.replace(/[ \t]+/g, " ")
+			.trim()
+			.slice(0, 30_000);
+		if (normalizedText.length < 80) {
+			throw new Error("We couldn't find enough readable text in that resume");
+		}
+
+		const result = await chat({
+			adapter: getResumeGeminiAdapter(),
+			messages: [
+				{
+					role: "user",
+					content: `Resume filename: ${data.name}\n\nResume text:\n${normalizedText}`,
+				},
+			],
+			systemPrompts: [RESUME_SYSTEM_PROMPT],
+			outputSchema: resumeSummarySchema,
+		});
+
+		const summary = resumeSummarySchema.parse(result);
+		const database = await connectToDatabase();
+		await database.collection("profiles").updateOne(
+			{ clerkUserId: userId },
+			{
+				$set: {
+					resumeImportedAt: new Date(),
+					resumeDraft: summary,
+				},
+				$setOnInsert: {
+					lifetimeMinutes: 0,
+					availableCredits: 0,
+					createdAt: new Date(),
+				},
+			},
+			{ upsert: true },
+		);
+
+		return summary;
+	});
+
+export const getOnboardingStateFn = createServerFn({ method: "GET" }).handler(
+	async () => {
+		const { isAuthenticated, userId } = await auth();
+
+		if (!isAuthenticated || !userId) {
+			return {
+				isAuthenticated: false,
+				completed: false,
+				profile: null,
+				contact: null,
+				resumeImported: false,
+			};
+		}
+
+		const database = await connectToDatabase();
+		const [document, user] = await Promise.all([
+			database.collection("profiles").findOne({ clerkUserId: userId }),
+			clerkClient().users.getUser(userId),
+		]);
+		const displayName = user.firstName || user.username || "Community member";
+		const email =
+			typeof document?.contactEmail === "string"
+				? document.contactEmail
+				: (user.primaryEmailAddress?.emailAddress ?? "");
+
+		const baseProfile = mapProfile(document, userId, displayName);
+		const resumeDraft = resumeSummarySchema.safeParse(document?.resumeDraft);
+
+		return {
+			isAuthenticated: true,
+			completed: document?.onboardingCompleted === true,
+			resumeImported: document?.resumeImportedAt instanceof Date,
+			profile: resumeDraft.success
+				? {
+						...baseProfile,
+						bio: resumeDraft.data.bio,
+						skills: resumeDraft.data.skills,
+						interests: resumeDraft.data.interests,
+					}
+				: baseProfile,
+			contact: {
+				phone:
+					typeof document?.contactPhone === "string"
+						? document.contactPhone
+						: "",
+				email,
+			},
+		};
+	},
+);
+
+export const getOnboardingStatusFn = createServerFn({ method: "GET" }).handler(
+	async () => {
+		const { isAuthenticated, userId } = await auth();
+		if (!isAuthenticated || !userId) {
+			return { isAuthenticated: false, completed: false };
+		}
+
+		const database = await connectToDatabase();
+		const document = await database
+			.collection("profiles")
+			.findOne(
+				{ clerkUserId: userId },
+				{ projection: { onboardingCompleted: 1 } },
+			);
+
+		return {
+			isAuthenticated: true,
+			completed: document?.onboardingCompleted === true,
+		};
+	},
+);
+
+export const completeOnboardingFn = createServerFn({ method: "POST" })
+	.validator(onboardingInputSchema)
+	.handler(async ({ data }) => {
+		const userId = await requireUserId();
+		const database = await connectToDatabase();
+		const existing = await database
+			.collection("profiles")
+			.findOne(
+				{ clerkUserId: userId },
+				{ projection: { resumeImportedAt: 1 } },
+			);
+		if (!(existing?.resumeImportedAt instanceof Date)) {
+			throw new Error("Upload and review your resume before finishing setup");
+		}
+		const now = new Date();
+
+		await database.collection("profiles").updateOne(
+			{ clerkUserId: userId },
+			{
+				$set: {
+					clerkUserId: userId,
+					displayName: data.displayName,
+					bio: data.bio,
+					skills: unique(data.skills),
+					interests: unique(data.interests),
+					availability: data.availability,
+					campusArea: data.campusArea,
+					contactPhone: data.phone || null,
+					contactEmail: data.email || null,
+					onboardingCompleted: true,
+					discoverable: true,
+					notifyOnInterest: true,
+					updatedAt: now,
+				},
+				$setOnInsert: {
+					lifetimeMinutes: 0,
+					availableCredits: 0,
+					createdAt: now,
+				},
+				$unset: { resumeDraft: "" },
+			},
+			{ upsert: true },
+		);
+
+		return { ok: true as const };
+	});
 
 export const getPublicProfileFn = createServerFn({ method: "GET" })
 	.validator((data: { userId: string }) => data)
@@ -242,6 +458,12 @@ export const updateProfileFn = createServerFn({ method: "POST" })
 					campusArea: data.campusArea,
 					discoverable: data.discoverable,
 					notifyOnInterest: data.notifyOnInterest,
+					...(data.phone !== undefined
+						? { contactPhone: data.phone || null }
+						: {}),
+					...(data.email !== undefined
+						? { contactEmail: data.email || null }
+						: {}),
 					updatedAt: now,
 				},
 				$setOnInsert: {

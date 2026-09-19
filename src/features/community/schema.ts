@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { intentTypeSchema } from "#/features/intents/schema";
+import { privateContactSchema } from "#/features/profiles/schema";
 
 export const communityStatusSchema = z.enum([
 	"active",
@@ -33,7 +34,12 @@ export const expressInterestInputSchema = z.object({
 	postType: intentTypeSchema,
 });
 
-export const matchStatusSchema = z.enum(["pending", "accepted", "completed"]);
+export const matchStatusSchema = z.enum([
+	"pending",
+	"accepted",
+	"awaiting_confirmation",
+	"completed",
+]);
 
 export const matchActionInputSchema = z.object({
 	matchId: z.string().min(1),
@@ -69,11 +75,28 @@ export const boardItemSchema = communityPostSchema
 
 export type BoardItem = z.infer<typeof boardItemSchema>;
 
+export const activeConnectionSchema = z.object({
+	id: z.string(),
+	postTitle: z.string(),
+	postType: intentTypeSchema,
+	partnerName: z.string(),
+	partnerContact: privateContactSchema,
+	minutes: z.number().int().positive(),
+	status: matchStatusSchema.exclude(["pending"]),
+	youConfirmed: z.boolean(),
+	partnerConfirmed: z.boolean(),
+	role: z.enum(["provider", "recipient"]),
+});
+
+export type ActiveConnection = z.infer<typeof activeConnectionSchema>;
+
 export const impactSnapshotSchema = z.object({
 	isAuthenticated: z.boolean(),
 	posts: z.number().int().nonnegative(),
 	peopleReached: z.number().int().nonnegative(),
 	minutesPledged: z.number().int().nonnegative(),
+	verifiedMinutes: z.number().int().nonnegative(),
+	availableCredits: z.number().int().nonnegative(),
 	skills: z.array(z.string()),
 	recent: z.array(
 		communityPostSchema.omit({
@@ -87,3 +110,14 @@ export const impactSnapshotSchema = z.object({
 });
 
 export type ImpactSnapshot = z.infer<typeof impactSnapshotSchema>;
+
+export const leaderboardEntrySchema = z.object({
+	rank: z.number().int().positive(),
+	userId: z.string(),
+	displayName: z.string(),
+	verifiedMinutes: z.number().int().positive(),
+	exchanges: z.number().int().positive(),
+	skills: z.array(z.string()),
+});
+
+export type LeaderboardEntry = z.infer<typeof leaderboardEntrySchema>;

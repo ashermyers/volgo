@@ -1,5 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Clock3, HeartHandshake, Sparkles, Users } from "lucide-react";
+import {
+	BadgeCheck,
+	Clock3,
+	HeartHandshake,
+	Sparkles,
+	Users,
+} from "lucide-react";
 import { motion } from "motion/react";
 import type { ReactNode } from "react";
 
@@ -35,7 +41,7 @@ function ImpactPage() {
 				<PageHeader
 					kicker="Ut Prosim"
 					title="Your impact"
-					description="A quiet record of time offered, people reached, and skills you’ve put in service of others."
+					description="A record of time both people verified, neighbors reached, and skills put in service of others."
 				/>
 
 				{!data.isAuthenticated ? (
@@ -44,27 +50,34 @@ function ImpactPage() {
 					</div>
 				) : (
 					<>
-						<div className="mt-10 grid gap-4 sm:grid-cols-3">
+						<div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 							<StatCard
 								icon={<Clock3 className="size-4" />}
-								label="Time pledged"
-								value={formatHours(data.minutesPledged)}
-								hint="From the offers and requests you’ve posted"
+								label="Verified time"
+								value={formatHours(data.verifiedMinutes)}
+								hint="Confirmed by both people"
 								index={0}
+							/>
+							<StatCard
+								icon={<BadgeCheck className="size-4" />}
+								label="Time credits"
+								value={formatHours(data.availableCredits)}
+								hint="Earned by providing verified help"
+								index={1}
 							/>
 							<StatCard
 								icon={<Users className="size-4" />}
 								label="People reached"
 								value={String(data.peopleReached)}
 								hint="Neighbors you’ve asked to help, or offered to help"
-								index={1}
+								index={2}
 							/>
 							<StatCard
 								icon={<HeartHandshake className="size-4" />}
 								label="Posts"
 								value={String(data.posts)}
 								hint="Help asked for and time offered"
-								index={2}
+								index={3}
 							/>
 						</div>
 
@@ -88,8 +101,8 @@ function ImpactPage() {
 								</p>
 							)}
 							<p className="mt-5 text-xs leading-5 text-muted-foreground">
-								Verified hours will be sealed later as proof of service. For now
-								this page is your living ledger — no tokens, just time given.
+								Credits appear only after both people confirm the time. One
+								credit represents one verified minute of help provided.
 							</p>
 						</section>
 
