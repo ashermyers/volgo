@@ -3,6 +3,7 @@ import {
 	BadgeCheck,
 	Clock3,
 	HeartHandshake,
+	Link2,
 	Sparkles,
 	Users,
 } from "lucide-react";
@@ -50,7 +51,7 @@ function ImpactPage() {
 					</div>
 				) : (
 					<>
-						<div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+						<div className="mt-10 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
 							<StatCard
 								icon={<Clock3 className="size-4" />}
 								label="Verified time"
@@ -59,25 +60,32 @@ function ImpactPage() {
 								index={0}
 							/>
 							<StatCard
+								icon={<Link2 className="size-4" />}
+								label="On-chain audited"
+								value={formatHours(data.auditedMinutes)}
+								hint="Receipts confirmed on Solana"
+								index={1}
+							/>
+							<StatCard
 								icon={<BadgeCheck className="size-4" />}
 								label="Time credits"
 								value={formatHours(data.availableCredits)}
 								hint="Earned by providing verified help"
-								index={1}
+								index={2}
 							/>
 							<StatCard
 								icon={<Users className="size-4" />}
 								label="People reached"
 								value={String(data.peopleReached)}
 								hint="Neighbors you’ve asked to help, or offered to help"
-								index={2}
+								index={3}
 							/>
 							<StatCard
 								icon={<HeartHandshake className="size-4" />}
 								label="Posts"
 								value={String(data.posts)}
 								hint="Help asked for and time offered"
-								index={3}
+								index={4}
 							/>
 						</div>
 

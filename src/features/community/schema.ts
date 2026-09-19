@@ -75,6 +75,30 @@ export const boardItemSchema = communityPostSchema
 
 export type BoardItem = z.infer<typeof boardItemSchema>;
 
+export const solanaAuditSchema = z.object({
+	status: z.enum([
+		"pending",
+		"submitting",
+		"submitted",
+		"confirmed",
+		"failed",
+		"unconfigured",
+	]),
+	network: z.string(),
+	receiptId: z.string(),
+	receiptHash: z.string(),
+	authority: z.string().nullable(),
+	signature: z.string().nullable(),
+	slot: z.number().int().nonnegative().nullable(),
+	explorerUrl: z.string().url().nullable(),
+});
+
+export type SolanaAudit = z.infer<typeof solanaAuditSchema>;
+
+export const auditLookupInputSchema = z.object({
+	receipt: z.string().trim().max(128).optional(),
+});
+
 export const activeConnectionSchema = z.object({
 	id: z.string(),
 	postTitle: z.string(),
@@ -86,6 +110,7 @@ export const activeConnectionSchema = z.object({
 	youConfirmed: z.boolean(),
 	partnerConfirmed: z.boolean(),
 	role: z.enum(["provider", "recipient"]),
+	audit: solanaAuditSchema.nullable(),
 });
 
 export type ActiveConnection = z.infer<typeof activeConnectionSchema>;
@@ -96,6 +121,7 @@ export const impactSnapshotSchema = z.object({
 	peopleReached: z.number().int().nonnegative(),
 	minutesPledged: z.number().int().nonnegative(),
 	verifiedMinutes: z.number().int().nonnegative(),
+	auditedMinutes: z.number().int().nonnegative(),
 	availableCredits: z.number().int().nonnegative(),
 	skills: z.array(z.string()),
 	recent: z.array(

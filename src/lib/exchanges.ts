@@ -34,15 +34,11 @@ export async function confirmExchange({
 		throw new Error("That match could not be found");
 	}
 
-	if (match.status === "completed") {
-		return {
-			id: match._id.toString(),
-			status: "completed" as const,
-			waitingForPartner: false,
-		};
-	}
-
-	if (match.status !== "accepted" && match.status !== "awaiting_confirmation") {
+	if (
+		match.status !== "accepted" &&
+		match.status !== "awaiting_confirmation" &&
+		match.status !== "completed"
+	) {
 		throw new Error("Accept this match before marking it complete");
 	}
 
@@ -70,13 +66,15 @@ export async function confirmExchange({
 		postType === "request" ? String(match.toUserId) : String(match.fromUserId);
 	const now = new Date();
 
-	await database.collection("matches").updateOne(
-		{ _id: match._id, status: { $ne: "completed" } },
-		{
-			$addToSet: { confirmedBy: userId },
-			$set: { status: "awaiting_confirmation", updatedAt: now },
-		},
-	);
+	if (match.status !== "completed") {
+		await database.collection("matches").updateOne(
+			{ _id: match._id, status: { $ne: "completed" } },
+			{
+				$addToSet: { confirmedBy: userId },
+				$set: { status: "awaiting_confirmation", updatedAt: now },
+			},
+		);
+	}
 
 	const confirmedMatch = await database
 		.collection("matches")
@@ -87,6 +85,13 @@ export async function confirmExchange({
 		confirmedBy.includes(String(match.toUserId));
 
 	if (!bothConfirmed) {
+		if (match.status === "completed") {
+			return {
+				id: match._id.toString(),
+				status: "completed" as const,
+				waitingForPartner: false,
+			};
+		}
 		return {
 			id: match._id.toString(),
 			status: "awaiting_confirmation" as const,
@@ -94,7 +99,7 @@ export async function confirmExchange({
 		};
 	}
 
-	const completion = await database.collection("matches").updateOne(
+	await database.collection("matches").updateOne(
 		{
 			_id: match._id,
 			status: { $ne: "completed" },
@@ -111,47 +116,68 @@ export async function confirmExchange({
 		},
 	);
 
-	if (completion.modifiedCount > 0) {
-		await Promise.all([
-			database
-				.collection(collectionFor(postType))
-				.updateOne(
-					{ _id: post._id },
-					{ $set: { status: "completed", updatedAt: now } },
-				),
-			database.collection("exchanges").updateOne(
-				{ matchId: match._id.toString() },
-				{
-					$setOnInsert: {
-						matchId: match._id.toString(),
-						providerUserId,
-						recipientUserId,
-						minutes,
-						status: "completed",
-						verifiedByBoth: true,
-						createdAt: now,
-					},
-				},
-				{ upsert: true },
+	const matchIdValue = match._id.toString();
+	const exchanges = database.collection("exchanges");
+	await exchanges.createIndex({ matchId: 1 }, { unique: true });
+	await Promise.all([
+		database
+			.collection(collectionFor(postType))
+			.updateOne(
+				{ _id: post._id },
+				{ $set: { status: "completed", updatedAt: now } },
 			),
+		exchanges.updateOne(
+			{ matchId: matchIdValue },
+			{
+				$setOnInsert: {
+					matchId: matchIdValue,
+					providerUserId,
+					recipientUserId,
+					minutes,
+					status: "completed",
+					verifiedByBoth: true,
+					completedAt: now,
+					creditState: "pending",
+					createdAt: now,
+				},
+			},
+			{ upsert: true },
+		),
+	]);
+
+	const exchange = await exchanges.findOne({ matchId: matchIdValue });
+	if (exchange?.creditState === "pending") {
+		await Promise.all([
 			database.collection("profiles").updateOne(
-				{ clerkUserId: providerUserId },
+				{
+					clerkUserId: providerUserId,
+					creditedExchangeIds: { $ne: matchIdValue },
+				},
 				{
 					$inc: {
 						lifetimeMinutes: minutes,
 						availableCredits: minutes,
 					},
+					$addToSet: { creditedExchangeIds: matchIdValue },
 					$set: { updatedAt: now },
 				},
 			),
 			database.collection("profiles").updateOne(
-				{ clerkUserId: recipientUserId },
+				{
+					clerkUserId: recipientUserId,
+					creditedExchangeIds: { $ne: matchIdValue },
+				},
 				{
 					$inc: { lifetimeMinutes: minutes },
+					$addToSet: { creditedExchangeIds: matchIdValue },
 					$set: { updatedAt: now },
 				},
 			),
 		]);
+		await exchanges.updateOne(
+			{ _id: exchange._id, creditState: "pending" },
+			{ $set: { creditState: "complete", creditedAt: new Date() } },
+		);
 	}
 
 	return {

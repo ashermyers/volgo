@@ -20,6 +20,7 @@ import OpportunityCard, {
 import PageHeader from "#/components/page-header";
 import PagePending from "#/components/page-pending";
 import SegmentedControl from "#/components/segmented-control";
+import SolanaAuditStatus from "#/components/solana-audit-status";
 import { Button } from "#/components/ui/button";
 import type {
 	ActiveConnection,
@@ -30,6 +31,7 @@ import {
 	acceptMatchFn,
 	completeMatchFn,
 	getMyBoardFn,
+	retrySolanaAuditFn,
 } from "#/server/community";
 import { deleteIntentFn } from "#/server/intents";
 
@@ -112,6 +114,23 @@ function RequestsPage() {
 		}
 	}
 
+	async function retryAudit(connection: ActiveConnection) {
+		if (busyId) return;
+		setError(null);
+		setBusyId(connection.id);
+
+		try {
+			await retrySolanaAuditFn({ data: { matchId: connection.id } });
+			await router.invalidate();
+		} catch {
+			setError(
+				"We couldn't publish that Solana receipt yet. Please try again.",
+			);
+		} finally {
+			setBusyId(null);
+		}
+	}
+
 	return (
 		<AppShell>
 			<main className="mx-auto w-full max-w-5xl px-6 py-12 sm:py-16">
@@ -177,6 +196,7 @@ function RequestsPage() {
 											connection={connection}
 											busy={busyId === connection.id}
 											onConfirm={() => void complete(connection)}
+											onRetryAudit={() => void retryAudit(connection)}
 										/>
 									))}
 								</div>
@@ -280,10 +300,12 @@ function ConnectionCard({
 	connection,
 	busy,
 	onConfirm,
+	onRetryAudit,
 }: {
 	connection: ActiveConnection;
 	busy: boolean;
 	onConfirm: () => void;
+	onRetryAudit: () => void;
 }) {
 	const completed = connection.status === "completed";
 	const verifiedByBoth =
@@ -345,9 +367,16 @@ function ConnectionCard({
 
 			<div className="mt-4">
 				{verifiedByBoth ? (
-					<div className="flex items-center gap-2 text-sm font-medium text-primary">
-						<Check className="size-4" />
-						Both people verified these hours
+					<div className="space-y-3">
+						<div className="flex items-center gap-2 text-sm font-medium text-primary">
+							<Check className="size-4" />
+							Both people verified these hours
+						</div>
+						<SolanaAuditStatus
+							audit={connection.audit}
+							busy={busy}
+							onRetry={onRetryAudit}
+						/>
 					</div>
 				) : completed ? (
 					<div className="flex items-center gap-2 text-sm text-muted-foreground">

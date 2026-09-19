@@ -17,6 +17,45 @@ To build this application for production:
 bun --bun run build
 ```
 
+## Solana volunteer-hour audits
+
+VOLGO writes a signed Solana memo receipt after both people confirm an exchange.
+The chain receipt contains only the duration, completion time, a deterministic
+receipt ID, and one-way participant commitments. Names, contact details, post
+titles, and raw Clerk IDs are never published.
+
+MongoDB remains the source of truth for product state and credits. Solana is the
+independent audit layer: a temporary RPC or funding failure does not discard a
+verified exchange, and publishing can be retried without awarding credits twice.
+
+### Development setup
+
+1. Create a dedicated authority with the Solana CLI:
+
+   ```bash
+   solana-keygen new --outfile volgo-audit-authority.json
+   solana config set --url devnet
+   solana airdrop 1 --keypair volgo-audit-authority.json
+   ```
+
+2. Add the following server-only values to `.env.local`:
+
+   ```bash
+   SOLANA_AUDIT_ENABLED=true
+   SOLANA_NETWORK=devnet
+   SOLANA_AUTHORITY_SECRET_KEY=[the 64-byte JSON array from volgo-audit-authority.json]
+   ```
+
+   `SOLANA_RPC_URL` is optional for devnet, testnet, and mainnet-beta. Set it for
+   a private RPC provider or custom network. Keep the authority outside the
+   repository and never prefix its environment variable with `VITE_`.
+
+3. Complete an exchange from both accounts. The Requests page will show the
+   receipt hash and a Solana Explorer link after confirmation.
+
+For production, use a dedicated low-balance authority, a production RPC endpoint,
+secret-manager-backed environment variables, and `SOLANA_NETWORK=mainnet-beta`.
+
 ## Styling
 
 This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.

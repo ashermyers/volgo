@@ -4,17 +4,23 @@ import type { Document, WithId } from "mongodb";
 
 import {
 	type ActiveConnection,
+	auditLookupInputSchema,
 	type BoardItem,
 	type CommunityPost,
 	expressInterestInputSchema,
 	type IncomingInterest,
 	type LeaderboardEntry,
 	matchActionInputSchema,
+	type SolanaAudit,
 } from "#/features/community/schema";
 import { connectToDatabase, parseObjectId } from "#/lib/db";
 import { confirmExchange } from "#/lib/exchanges";
 import type { IntentKind } from "#/lib/matching";
 import { scoreOpportunity } from "#/lib/matching";
+import {
+	ensureSolanaAudit,
+	getSolanaAuditPublicConfig,
+} from "#/lib/solana-audit";
 
 type UserContext = {
 	offerSkills: string[];
@@ -53,6 +59,33 @@ function uniqueSkills(skills: string[]) {
 	}
 
 	return result;
+}
+
+function mapSolanaAudit(value: unknown): SolanaAudit | null {
+	if (!value || typeof value !== "object") return null;
+	const audit = value as Record<string, unknown>;
+	const status =
+		audit.status === "pending" ||
+		audit.status === "submitting" ||
+		audit.status === "submitted" ||
+		audit.status === "confirmed" ||
+		audit.status === "failed" ||
+		audit.status === "unconfigured"
+			? audit.status
+			: null;
+	if (!status) return null;
+
+	return {
+		status,
+		network: typeof audit.network === "string" ? audit.network : "devnet",
+		receiptId: typeof audit.receiptId === "string" ? audit.receiptId : "",
+		receiptHash: typeof audit.receiptHash === "string" ? audit.receiptHash : "",
+		authority: typeof audit.authority === "string" ? audit.authority : null,
+		signature: typeof audit.signature === "string" ? audit.signature : null,
+		slot: typeof audit.slot === "number" ? audit.slot : null,
+		explorerUrl:
+			typeof audit.explorerUrl === "string" ? audit.explorerUrl : null,
+	};
 }
 
 function mapDocument(
@@ -457,26 +490,38 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 				? String(match.toUserId)
 				: String(match.fromUserId),
 		);
-		const [activeNames, partnerProfiles, connectionPosts] = await Promise.all([
-			namesFor(partnerIds),
-			database
-				.collection("profiles")
-				.find({ clerkUserId: { $in: partnerIds } })
-				.toArray(),
-			Promise.all(
-				activeMatches.map(async (match) => {
-					const postId = await parseObjectId(String(match.postId));
-					if (!postId) return null;
-					const postType: IntentKind =
-						match.postType === "offer" ? "offer" : "request";
-					return database
-						.collection(collectionFor(postType))
-						.findOne({ _id: postId });
-				}),
-			),
-		]);
+		const [activeNames, partnerProfiles, connectionPosts, activeExchanges] =
+			await Promise.all([
+				namesFor(partnerIds),
+				database
+					.collection("profiles")
+					.find({ clerkUserId: { $in: partnerIds } })
+					.toArray(),
+				Promise.all(
+					activeMatches.map(async (match) => {
+						const postId = await parseObjectId(String(match.postId));
+						if (!postId) return null;
+						const postType: IntentKind =
+							match.postType === "offer" ? "offer" : "request";
+						return database
+							.collection(collectionFor(postType))
+							.findOne({ _id: postId });
+					}),
+				),
+				database
+					.collection("exchanges")
+					.find({
+						matchId: {
+							$in: activeMatches.map((match) => match._id.toString()),
+						},
+					})
+					.toArray(),
+			]);
 		const profilesById = new Map(
 			partnerProfiles.map((profile) => [String(profile.clerkUserId), profile]),
+		);
+		const exchangesByMatchId = new Map(
+			activeExchanges.map((exchange) => [String(exchange.matchId), exchange]),
 		);
 
 		const connections: ActiveConnection[] = activeMatches.flatMap(
@@ -522,6 +567,9 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 						youConfirmed: confirmedBy.includes(userId),
 						partnerConfirmed: confirmedBy.includes(partnerId),
 						role: providerUserId === userId ? "provider" : "recipient",
+						audit: mapSolanaAudit(
+							exchangesByMatchId.get(match._id.toString())?.audit,
+						),
 					},
 				];
 			},
@@ -619,7 +667,80 @@ export const completeMatchFn = createServerFn({ method: "POST" })
 		}
 
 		const database = await connectToDatabase();
-		return confirmExchange({ database, matchId, userId });
+		const result = await confirmExchange({ database, matchId, userId });
+		const audit =
+			result.status === "completed"
+				? await ensureSolanaAudit({
+						database,
+						matchId: matchId.toString(),
+					})
+				: null;
+		return { ...result, audit };
+	});
+
+export const retrySolanaAuditFn = createServerFn({ method: "POST" })
+	.validator(matchActionInputSchema)
+	.handler(async ({ data }) => {
+		const { isAuthenticated, userId } = await auth();
+
+		if (!isAuthenticated || !userId) {
+			throw new Error("You must be signed in to continue");
+		}
+
+		const matchId = await parseObjectId(data.matchId);
+		if (!matchId) {
+			throw new Error("That match could not be found");
+		}
+
+		const database = await connectToDatabase();
+		const match = await database.collection("matches").findOne({
+			_id: matchId,
+			status: "completed",
+			$or: [{ fromUserId: userId }, { toUserId: userId }],
+		});
+		if (!match) {
+			throw new Error("That completed match could not be found");
+		}
+
+		await confirmExchange({ database, matchId, userId });
+		return ensureSolanaAudit({
+			database,
+			matchId: matchId.toString(),
+		});
+	});
+
+export const getPublicAuditReceiptFn = createServerFn({ method: "GET" })
+	.validator(auditLookupInputSchema)
+	.handler(async ({ data }) => {
+		const config = await getSolanaAuditPublicConfig();
+		const receipt = data.receipt?.trim();
+		if (!receipt) return { config, searched: false, receipt: null };
+
+		const database = await connectToDatabase();
+		const exchange = await database.collection("exchanges").findOne({
+			status: "completed",
+			verifiedByBoth: true,
+			"audit.status": "confirmed",
+			$or: [
+				{ "audit.receiptId": receipt },
+				{ "audit.receiptHash": receipt },
+				{ "audit.signature": receipt },
+			],
+		});
+		const audit = mapSolanaAudit(exchange?.audit);
+		if (!exchange || !audit) {
+			return { config, searched: true, receipt: null };
+		}
+
+		return {
+			config,
+			searched: true,
+			receipt: {
+				minutes: typeof exchange.minutes === "number" ? exchange.minutes : 0,
+				completedAt: toIsoDate(exchange.completedAt ?? exchange.createdAt),
+				audit,
+			},
+		};
 	});
 
 export const getImpactFn = createServerFn({ method: "GET" }).handler(
@@ -633,6 +754,7 @@ export const getImpactFn = createServerFn({ method: "GET" }).handler(
 				peopleReached: 0,
 				minutesPledged: 0,
 				verifiedMinutes: 0,
+				auditedMinutes: 0,
 				availableCredits: 0,
 				skills: [] as string[],
 				recent: [] as Array<{
@@ -709,6 +831,14 @@ export const getImpactFn = createServerFn({ method: "GET" }).handler(
 				total + (typeof exchange.minutes === "number" ? exchange.minutes : 0),
 			0,
 		);
+		const auditedMinutes = exchanges.reduce(
+			(total, exchange) =>
+				exchange.audit?.status === "confirmed" &&
+				typeof exchange.minutes === "number"
+					? total + exchange.minutes
+					: total,
+			0,
+		);
 
 		return {
 			isAuthenticated: true,
@@ -716,6 +846,7 @@ export const getImpactFn = createServerFn({ method: "GET" }).handler(
 			peopleReached: people.size,
 			minutesPledged,
 			verifiedMinutes,
+			auditedMinutes,
 			availableCredits:
 				typeof profile?.availableCredits === "number"
 					? profile.availableCredits
