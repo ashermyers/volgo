@@ -24,25 +24,49 @@ async function archivePendingMatches(
 	);
 }
 
+async function hideCompletedMatchesFromBoard(
+	database: Db,
+	postId: ObjectId,
+	now = new Date(),
+) {
+	await database.collection("matches").updateMany(
+		{
+			postId: postId.toString(),
+			status: { $in: ["accepted", "awaiting_confirmation", "completed"] },
+		},
+		{
+			$set: {
+				hiddenFromBoard: true,
+				updatedAt: now,
+			},
+		},
+	);
+}
+
 export async function archiveOwnedIntent({
 	database,
 	postId,
 	postType,
 	userId,
+	allowCompleted = false,
 }: {
 	database: Db;
 	postId: ObjectId;
 	postType: IntentKind;
 	userId: string;
+	allowCompleted?: boolean;
 }) {
 	const collection = database.collection(collectionFor(postType));
 	const post = await collection.findOne({ _id: postId, userId });
 	if (!post) throw new Error("That post could not be found");
-	if (post.status === "completed") {
+	if (post.status === "completed" && !allowCompleted) {
 		throw new Error("Completed posts stay in your verified history");
 	}
 	if (post.status === "archived") {
-		await archivePendingMatches(database, postId);
+		await Promise.all([
+			archivePendingMatches(database, postId),
+			hideCompletedMatchesFromBoard(database, postId),
+		]);
 		return { ok: true as const, archived: true as const };
 	}
 
@@ -64,12 +88,20 @@ export async function archiveOwnedIntent({
 			return { ok: true as const, archived: true as const };
 		}
 		if (current?.status === "completed") {
+			if (allowCompleted) {
+				throw new Error(
+					"That completed post changed before it could be archived",
+				);
+			}
 			throw new Error("Completed posts stay in your verified history");
 		}
 		throw new Error("That post changed before it could be archived");
 	}
 
-	await archivePendingMatches(database, postId, now);
+	await Promise.all([
+		archivePendingMatches(database, postId, now),
+		hideCompletedMatchesFromBoard(database, postId, now),
+	]);
 
 	return { ok: true as const, archived: true as const };
 }
@@ -95,8 +127,8 @@ export async function restoreOwnedIntent({
 
 	const allowedStatuses =
 		postType === "offer"
-			? new Set(["active", "matched"])
-			: new Set(["open", "active", "matched"]);
+			? new Set(["active", "matched", "completed"])
+			: new Set(["open", "active", "matched", "completed"]);
 	const previousStatus =
 		typeof post.archivedPreviousStatus === "string" &&
 		allowedStatuses.has(post.archivedPreviousStatus)
@@ -117,17 +149,29 @@ export async function restoreOwnedIntent({
 		throw new Error("That archived post changed before it could be restored");
 	}
 
-	await database.collection("matches").updateMany(
-		{
-			postId: postId.toString(),
-			status: "archived",
-			archivedByPost: true,
-		},
-		{
-			$set: { status: "pending", updatedAt: now },
-			$unset: { archivedByPost: "", archivedAt: "" },
-		},
-	);
+	await Promise.all([
+		database.collection("matches").updateMany(
+			{
+				postId: postId.toString(),
+				status: "archived",
+				archivedByPost: true,
+			},
+			{
+				$set: { status: "pending", updatedAt: now },
+				$unset: { archivedByPost: "", archivedAt: "" },
+			},
+		),
+		database.collection("matches").updateMany(
+			{
+				postId: postId.toString(),
+				hiddenFromBoard: true,
+			},
+			{
+				$set: { updatedAt: now },
+				$unset: { hiddenFromBoard: "" },
+			},
+		),
+	]);
 
 	return { ok: true as const, restored: true as const };
 }

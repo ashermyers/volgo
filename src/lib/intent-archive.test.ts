@@ -38,17 +38,26 @@ function createDatabase() {
 		updateMany: async (rawFilter: unknown, rawUpdate: unknown) => {
 			const filter = rawFilter as {
 				postId: string;
-				status: string;
+				status?: string | { $in: string[] };
 				archivedByPost?: boolean;
+				hiddenFromBoard?: boolean;
 			};
 			const update = rawUpdate as Update;
 			let modifiedCount = 0;
 			for (const match of matches) {
+				const statusMatches =
+					filter.status === undefined
+						? true
+						: typeof filter.status === "string"
+							? match.status === filter.status
+							: filter.status.$in.includes(String(match.status));
 				if (
 					match.postId !== filter.postId ||
-					match.status !== filter.status ||
+					!statusMatches ||
 					(filter.archivedByPost !== undefined &&
-						match.archivedByPost !== filter.archivedByPost)
+						match.archivedByPost !== filter.archivedByPost) ||
+					(filter.hiddenFromBoard !== undefined &&
+						match.hiddenFromBoard !== filter.hiddenFromBoard)
 				) {
 					continue;
 				}
@@ -63,7 +72,9 @@ function createDatabase() {
 	};
 	const database = {
 		collection: (name: string) =>
-			name === "helpRequests" ? helpRequests : matchCollection,
+			name === "helpRequests" || name === "offers"
+				? helpRequests
+				: matchCollection,
 	} as unknown as Db;
 
 	return { database, postId, post, matches };
@@ -88,6 +99,8 @@ describe("intent archival", () => {
 			"accepted",
 			"completed",
 		]);
+		expect(state.matches[1]).toMatchObject({ hiddenFromBoard: true });
+		expect(state.matches[2]).toMatchObject({ hiddenFromBoard: true });
 
 		await restoreOwnedIntent({
 			database: state.database,
@@ -102,6 +115,8 @@ describe("intent archival", () => {
 			"accepted",
 			"completed",
 		]);
+		expect(state.matches[1]).not.toHaveProperty("hiddenFromBoard");
+		expect(state.matches[2]).not.toHaveProperty("hiddenFromBoard");
 	});
 
 	it("rejects archival by a non-owner", async () => {
@@ -134,5 +149,49 @@ describe("intent archival", () => {
 			"accepted",
 			"completed",
 		]);
+	});
+
+	it("archives a verified completed post only when explicitly authorized", async () => {
+		const state = createDatabase();
+		state.post.status = "completed";
+
+		await archiveOwnedIntent({
+			database: state.database,
+			postId: state.postId,
+			postType: "request",
+			userId: "owner",
+			allowCompleted: true,
+		});
+		expect(state.post).toMatchObject({
+			status: "archived",
+			archivedPreviousStatus: "completed",
+		});
+		expect(state.matches[2]).toMatchObject({
+			status: "completed",
+			hiddenFromBoard: true,
+		});
+
+		await restoreOwnedIntent({
+			database: state.database,
+			postId: state.postId,
+			postType: "request",
+			userId: "owner",
+		});
+		expect(state.post.status).toBe("completed");
+	});
+
+	it("also archives a completed offer owned by the provider", async () => {
+		const state = createDatabase();
+		state.post.status = "completed";
+
+		await archiveOwnedIntent({
+			database: state.database,
+			postId: state.postId,
+			postType: "offer",
+			userId: "owner",
+			allowCompleted: true,
+		});
+		expect(state.post.status).toBe("archived");
+		expect(state.post.archivedPreviousStatus).toBe("completed");
 	});
 });

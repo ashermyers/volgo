@@ -1,4 +1,9 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	useNavigate,
+	useRouter,
+} from "@tanstack/react-router";
 import { Check, Compass, Sparkles } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
@@ -12,7 +17,12 @@ import PaginationControls from "#/components/pagination-controls";
 import SegmentedControl from "#/components/segmented-control";
 import { Button } from "#/components/ui/button";
 import type { CommunityPost } from "#/features/community/schema";
-import { expressInterestFn, getDiscoverFeedFn } from "#/server/community";
+import { notifyToast } from "#/lib/notify-toast";
+import {
+	expressInterestFn,
+	getDiscoverFeedFn,
+	withdrawInterestFn,
+} from "#/server/community";
 
 export const Route = createFileRoute("/discover")({
 	validateSearch: (
@@ -57,19 +67,19 @@ function DiscoverPage() {
 		Route.useLoaderData();
 	const search = Route.useSearch();
 	const navigate = useNavigate();
+	const router = useRouter();
 	const filter: Filter =
 		search.filter ?? (hasProfileSignal ? "for-you" : "all");
 	const [busyId, setBusyId] = useState<string | null>(null);
-	const [sentIds, setSentIds] = useState<Set<string>>(
-		() =>
-			new Set(
-				items.filter((item) => item.expressedInterest).map((item) => item.id),
-			),
-	);
+	const [sentOverride, setSentOverride] = useState<Record<string, boolean>>({});
 	const [error, setError] = useState<string | null>(null);
 
+	function isSent(item: CommunityPost) {
+		return sentOverride[item.id] ?? item.expressedInterest;
+	}
+
 	const featured = items
-		.filter((item) => (item.matchScore ?? 0) >= 55 && !sentIds.has(item.id))
+		.filter((item) => (item.matchScore ?? 0) >= 55 && !isSent(item))
 		.slice(0, 2);
 	const featuredIds = new Set(featured.map((item) => item.id));
 	const rest = items.filter((item) => !featuredIds.has(item.id));
@@ -87,16 +97,27 @@ function DiscoverPage() {
 			return;
 		}
 
-		if (sentIds.has(item.id) || busyId) return;
+		if (isSent(item) || busyId) return;
 
 		setError(null);
 		setBusyId(item.id);
 
 		try {
-			await expressInterestFn({
+			const result = await expressInterestFn({
 				data: { postId: item.id, postType: item.type },
 			});
-			setSentIds((current) => new Set(current).add(item.id));
+			setSentOverride((current) => ({ ...current, [item.id]: true }));
+			notifyToast({
+				title: result.alreadySent
+					? "Already sent"
+					: item.type === "request"
+						? "Help offered"
+						: "Interest sent",
+				description: result.alreadySent
+					? "They already have your reply."
+					: `We’ll notify them about “${item.title}”.`,
+			});
+			await router.invalidate();
 		} catch (caughtError) {
 			setError(
 				caughtError instanceof Error &&
@@ -104,6 +125,27 @@ function DiscoverPage() {
 					? "Please sign in before continuing."
 					: "We couldn't send that yet. Please try again.",
 			);
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	async function withdrawInterest(item: CommunityPost) {
+		if (busyId) return;
+		setError(null);
+		setBusyId(item.id);
+		try {
+			await withdrawInterestFn({
+				data: { postId: item.id, postType: item.type },
+			});
+			setSentOverride((current) => ({ ...current, [item.id]: false }));
+			notifyToast({
+				title: "Reply withdrawn",
+				description: `You can send interest again if “${item.title}” is still open.`,
+			});
+			await router.invalidate();
+		} catch {
+			setError("We couldn't withdraw that yet. Please try again.");
 		} finally {
 			setBusyId(null);
 		}
@@ -203,8 +245,9 @@ function DiscoverPage() {
 													<InterestButton
 														item={item}
 														busy={busyId === item.id}
-														sent={sentIds.has(item.id)}
+														sent={isSent(item)}
 														onClick={() => void sendInterest(item)}
+														onWithdraw={() => void withdrawInterest(item)}
 													/>
 												}
 											/>
@@ -235,8 +278,9 @@ function DiscoverPage() {
 												<InterestButton
 													item={item}
 													busy={busyId === item.id}
-													sent={sentIds.has(item.id)}
+													sent={isSent(item)}
 													onClick={() => void sendInterest(item)}
+													onWithdraw={() => void withdrawInterest(item)}
 												/>
 											}
 										/>
@@ -268,32 +312,41 @@ function InterestButton({
 	busy,
 	sent,
 	onClick,
+	onWithdraw,
 }: {
 	item: CommunityPost;
 	busy: boolean;
 	sent: boolean;
 	onClick: () => void;
+	onWithdraw: () => void;
 }) {
+	if (sent) {
+		return (
+			<motion.div layout className="grid gap-2">
+				<Button className="w-full gap-2" variant="secondary" disabled>
+					<Check className="size-4" />
+					Interest sent
+				</Button>
+				<Button
+					variant="ghost"
+					className="w-full text-muted-foreground"
+					disabled={busy}
+					onClick={onWithdraw}
+				>
+					{busy ? "Withdrawing…" : "Withdraw reply"}
+				</Button>
+			</motion.div>
+		);
+	}
+
 	return (
 		<motion.div layout>
-			<Button
-				className="w-full gap-2"
-				variant={sent ? "secondary" : "default"}
-				disabled={busy || sent}
-				onClick={onClick}
-			>
-				{sent ? (
-					<>
-						<Check className="size-4" />
-						Interest sent
-					</>
-				) : busy ? (
-					"Sending…"
-				) : item.type === "request" ? (
-					"I can help"
-				) : (
-					"I could use this"
-				)}
+			<Button className="w-full gap-2" disabled={busy} onClick={onClick}>
+				{busy
+					? "Sending…"
+					: item.type === "request"
+						? "I can help"
+						: "I could use this"}
 			</Button>
 		</motion.div>
 	);

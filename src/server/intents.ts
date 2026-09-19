@@ -10,10 +10,13 @@ import {
 	capturedIntentSchema,
 	deleteIntentInputSchema,
 	publishIntentInputSchema,
+	updateIntentInputSchema,
 } from "#/features/intents/schema";
 import { localAnalyzeIntent } from "#/lib/clarify";
 import { connectToDatabase, parseObjectId } from "#/lib/db";
 import { archiveOwnedIntent, restoreOwnedIntent } from "#/lib/intent-archive";
+import { updateOwnedIntent } from "#/lib/intent-update";
+import { createNotification } from "#/lib/notifications";
 import { mergeSkillsIntoProfile } from "#/server/profiles";
 
 const INTENT_SYSTEM_PROMPT = `You help people in VOLGO, a community time-banking service, turn a note into a useful post.
@@ -117,6 +120,16 @@ export const publishIntentFn = createServerFn({ method: "POST" })
 				updatedAt: now,
 			});
 
+			await createNotification(database, {
+				userId,
+				actorUserId: userId,
+				type: "post_published",
+				title: "Your offer is live",
+				body: `“${data.intent.title}” is on the community board.`,
+				href: "/requests",
+				entityId: `published:${result.insertedId.toString()}`,
+			});
+
 			return { id: result.insertedId.toString(), type: "offer" as const };
 		}
 
@@ -133,7 +146,72 @@ export const publishIntentFn = createServerFn({ method: "POST" })
 			updatedAt: now,
 		});
 
+		await createNotification(database, {
+			userId,
+			actorUserId: userId,
+			type: "post_published",
+			title: "Your request is live",
+			body: `“${data.intent.title}” is on the community board.`,
+			href: "/requests",
+			entityId: `published:${result.insertedId.toString()}`,
+		});
+
 		return { id: result.insertedId.toString(), type: "request" as const };
+	});
+
+export const updateIntentFn = createServerFn({ method: "POST" })
+	.validator(updateIntentInputSchema)
+	.handler(async ({ data }) => {
+		const userId = await requireUserId();
+		const postId = await parseObjectId(data.postId);
+		if (!postId) throw new Error("That post could not be found");
+
+		const database = await connectToDatabase();
+		const result = await updateOwnedIntent({
+			database,
+			postId,
+			postType: data.postType,
+			userId,
+			title: data.title,
+			description: data.description,
+			skills: data.skills,
+			minutes: data.minutes,
+			availability: data.availability,
+		});
+
+		const involved = await database
+			.collection("matches")
+			.find({
+				postId: data.postId,
+				status: { $in: ["pending", "accepted", "awaiting_confirmation"] },
+			})
+			.project({ fromUserId: 1, toUserId: 1 })
+			.toArray();
+		const recipientIds = new Set(
+			involved.flatMap((match) =>
+				[match.fromUserId, match.toUserId].filter(
+					(id): id is string => typeof id === "string" && id !== userId,
+				),
+			),
+		);
+		await Promise.all(
+			[...recipientIds].map((recipientId) =>
+				createNotification(database, {
+					userId: recipientId,
+					actorUserId: userId,
+					type: "post_updated",
+					title:
+						data.postType === "request"
+							? "A request you replied to changed"
+							: "An offer you replied to changed",
+					body: `“${data.title}” was updated. Review it before you continue.`,
+					href: "/discover",
+					entityId: `updated:${data.postId}:${recipientId}:${Date.now()}`,
+				}),
+			),
+		);
+
+		return result;
 	});
 
 export const archiveIntentFn = createServerFn({ method: "POST" })
@@ -147,12 +225,43 @@ export const archiveIntentFn = createServerFn({ method: "POST" })
 		}
 
 		const database = await connectToDatabase();
-		return archiveOwnedIntent({
+		const involved = await database
+			.collection("matches")
+			.find({
+				postId: data.postId,
+				status: { $in: ["pending", "accepted", "awaiting_confirmation"] },
+			})
+			.toArray();
+		const result = await archiveOwnedIntent({
 			database,
 			postId,
 			postType: data.postType,
 			userId,
+			allowCompleted: true,
 		});
+		const clerkUser = await clerkClient().users.getUser(userId);
+		const actorName = clerkUser.firstName || clerkUser.username || "Someone";
+		await Promise.all(
+			involved.map((match) => {
+				const recipientId =
+					String(match.fromUserId) === userId
+						? String(match.toUserId)
+						: String(match.fromUserId);
+				return createNotification(database, {
+					userId: recipientId,
+					actorUserId: userId,
+					type: "post_withdrawn",
+					title:
+						data.postType === "request"
+							? "A request was withdrawn"
+							: "An offer was withdrawn",
+					body: `${actorName} withdrew a post you were connected to.`,
+					href: "/discover",
+					entityId: `withdrawn:${data.postId}:${recipientId}`,
+				});
+			}),
+		);
+		return result;
 	});
 
 export const restoreIntentFn = createServerFn({ method: "POST" })

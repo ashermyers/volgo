@@ -21,8 +21,10 @@ import {
 } from "#/features/pagination/schema";
 import { connectToDatabase, parseObjectId } from "#/lib/db";
 import { confirmExchange } from "#/lib/exchanges";
+import { archiveOwnedIntent } from "#/lib/intent-archive";
 import type { IntentKind } from "#/lib/matching";
 import { scoreOpportunity } from "#/lib/matching";
+import { createNotification, wantsInterestAlerts } from "#/lib/notifications";
 import {
 	ensureSolanaAudit,
 	getSolanaAuditPublicConfig,
@@ -51,6 +53,18 @@ function asNullableString(value: unknown) {
 function toIsoDate(value: unknown) {
 	if (value instanceof Date) return value.toISOString();
 	return new Date(String(value)).toISOString();
+}
+
+function incomingMatchStatus(status: unknown) {
+	if (
+		status === "accepted" ||
+		status === "awaiting_confirmation" ||
+		status === "completed" ||
+		status === "withdrawn"
+	) {
+		return status;
+	}
+	return "pending" as const;
 }
 
 function uniqueSkills(skills: string[]) {
@@ -545,7 +559,18 @@ export const getDiscoverFeedFn = createServerFn({ method: "GET" })
 			userId && postIds.length > 0
 				? database
 						.collection("matches")
-						.find({ fromUserId: userId, postId: { $in: postIds } })
+						.find({
+							fromUserId: userId,
+							postId: { $in: postIds },
+							status: {
+								$in: [
+									"pending",
+									"accepted",
+									"awaiting_confirmation",
+									"completed",
+								],
+							},
+						})
 						.project({ postId: 1 })
 						.toArray()
 				: Promise.resolve([]),
@@ -636,7 +661,7 @@ export const expressInterestFn = createServerFn({ method: "POST" })
 			postId: data.postId,
 		});
 
-		if (existing) {
+		if (existing && existing.status !== "withdrawn") {
 			return { id: existing._id.toString(), alreadySent: true };
 		}
 
@@ -662,18 +687,103 @@ export const expressInterestFn = createServerFn({ method: "POST" })
 		});
 
 		const now = new Date();
-		const result = await database.collection("matches").insertOne({
-			postId: data.postId,
-			postType: data.postType,
+		const matchId = existing
+			? existing._id
+			: (
+					await database.collection("matches").insertOne({
+						postId: data.postId,
+						postType: data.postType,
+						fromUserId: userId,
+						toUserId: String(post.userId),
+						score: match.score,
+						explanation: match.explanation,
+						status: "pending",
+						createdAt: now,
+					})
+				).insertedId;
+		if (existing) {
+			await database.collection("matches").updateOne(
+				{ _id: existing._id, status: "withdrawn" },
+				{
+					$set: {
+						status: "pending",
+						score: match.score,
+						explanation: match.explanation,
+						updatedAt: now,
+					},
+					$unset: { withdrawnAt: "" },
+				},
+			);
+		}
+
+		const names = await namesFor([userId]);
+		const ownerProfile = await database.collection("profiles").findOne({
+			clerkUserId: String(post.userId),
+		});
+		if (
+			wantsInterestAlerts({
+				notifyOnInterest: ownerProfile?.notifyOnInterest,
+			})
+		) {
+			await createNotification(database, {
+				userId: String(post.userId),
+				actorUserId: userId,
+				type: "interest_received",
+				title:
+					data.postType === "request"
+						? "Someone offered to help"
+						: "Someone is interested",
+				body: `${names.get(userId) ?? "Someone"} responded to “${mapped.title}”.`,
+				href: "/requests",
+				entityId: `interest:${matchId.toString()}:${now.getTime()}`,
+			});
+		}
+
+		return { id: matchId.toString(), alreadySent: false };
+	});
+
+export const withdrawInterestFn = createServerFn({ method: "POST" })
+	.validator(expressInterestInputSchema)
+	.handler(async ({ data }) => {
+		const { isAuthenticated, userId } = await auth();
+		if (!isAuthenticated || !userId) {
+			throw new Error("You must be signed in to continue");
+		}
+
+		const database = await connectToDatabase();
+		const match = await database.collection("matches").findOne({
 			fromUserId: userId,
-			toUserId: String(post.userId),
-			score: match.score,
-			explanation: match.explanation,
+			postId: data.postId,
 			status: "pending",
-			createdAt: now,
+		});
+		if (!match) {
+			throw new Error("That reply is no longer pending");
+		}
+
+		const now = new Date();
+		await database.collection("matches").updateOne(
+			{ _id: match._id, fromUserId: userId, status: "pending" },
+			{
+				$set: {
+					status: "withdrawn",
+					withdrawnAt: now,
+					updatedAt: now,
+				},
+			},
+		);
+
+		const names = await namesFor([userId]);
+		await createNotification(database, {
+			userId: String(match.toUserId),
+			actorUserId: userId,
+			type: "interest_withdrawn",
+			title: "Someone withdrew their reply",
+			body: `${names.get(userId) ?? "Someone"} withdrew interest in your post.`,
+			href: "/requests",
+			entityId: `interest-withdrawn:${match._id.toString()}`,
 		});
 
-		return { id: result.insertedId.toString(), alreadySent: false };
+		return { ok: true as const, withdrawn: true as const };
 	});
 
 function collectionFor(postType: IntentKind) {
@@ -734,12 +844,7 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 			const post = postsById.get(String(match.postId));
 			if (!post) return [];
 
-			const status =
-				match.status === "accepted" ||
-				match.status === "awaiting_confirmation" ||
-				match.status === "completed"
-					? match.status
-					: "pending";
+			const status = incomingMatchStatus(match.status);
 
 			return [
 				{
@@ -834,13 +939,15 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 		const connections: ActiveConnection[] = activeMatches.flatMap(
 			(match, index) => {
 				const post = connectionPosts[index];
-				if (!post) return [];
+				if (!post || post.status === "archived") return [];
 
 				const fromUserId = String(match.fromUserId);
 				const toUserId = String(match.toUserId);
 				const partnerId = fromUserId === userId ? toUserId : fromUserId;
 				const profile = profilesById.get(partnerId);
 				const confirmedBy = asStringArray(match.confirmedBy);
+				const bothVerified =
+					confirmedBy.includes(fromUserId) && confirmedBy.includes(toUserId);
 				const postType: IntentKind =
 					match.postType === "offer" ? "offer" : "request";
 				const providerUserId = postType === "request" ? fromUserId : toUserId;
@@ -874,6 +981,10 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 						youConfirmed: confirmedBy.includes(userId),
 						partnerConfirmed: confirmedBy.includes(partnerId),
 						role: providerUserId === userId ? "provider" : "recipient",
+						canArchivePost:
+							match.status === "completed" &&
+							bothVerified &&
+							post.status !== "archived",
 						audit: mapSolanaAudit(
 							exchangesByMatchId.get(match._id.toString())?.audit,
 						),
@@ -930,6 +1041,8 @@ export const getMyBoardPaginatedFn = createServerFn({ method: "GET" })
 		const connectionFilter = {
 			$or: [{ toUserId: userId }, { fromUserId: userId }],
 			status: { $in: ["accepted", "awaiting_confirmation", "completed"] },
+			hiddenFromBoard: { $ne: true },
+			hiddenFromBoardBy: { $ne: userId },
 		};
 		const [offerCount, requestCount, incomingCount, connectionCount] =
 			await Promise.all([
@@ -1009,7 +1122,14 @@ export const getMyBoardPaginatedFn = createServerFn({ method: "GET" })
 						.find({
 							postId: { $in: postIds },
 							toUserId: userId,
-							status: { $ne: "archived" },
+							status: {
+								$in: [
+									"pending",
+									"accepted",
+									"awaiting_confirmation",
+									"completed",
+								],
+							},
 						})
 						.toArray()
 				: [];
@@ -1050,12 +1170,7 @@ export const getMyBoardPaginatedFn = createServerFn({ method: "GET" })
 		const mapIncoming = (match: WithId<Document>) => {
 			const post = postsById.get(String(match.postId));
 			if (!post) return null;
-			const status =
-				match.status === "accepted" ||
-				match.status === "awaiting_confirmation" ||
-				match.status === "completed"
-					? match.status
-					: "pending";
+			const status = incomingMatchStatus(match.status);
 			return {
 				id: match._id.toString(),
 				postId: post.id,
@@ -1141,12 +1256,14 @@ export const getMyBoardPaginatedFn = createServerFn({ method: "GET" })
 		const connections: ActiveConnection[] = activeMatches.flatMap(
 			(match, index) => {
 				const post = connectionPosts[index];
-				if (!post) return [];
+				if (!post || post.status === "archived") return [];
 				const fromUserId = String(match.fromUserId);
 				const toUserId = String(match.toUserId);
 				const partnerId = fromUserId === userId ? toUserId : fromUserId;
 				const profile = profilesById.get(partnerId);
 				const confirmedBy = asStringArray(match.confirmedBy);
+				const bothVerified =
+					confirmedBy.includes(fromUserId) && confirmedBy.includes(toUserId);
 				const postType: IntentKind =
 					match.postType === "offer" ? "offer" : "request";
 				const providerUserId = postType === "request" ? fromUserId : toUserId;
@@ -1179,6 +1296,10 @@ export const getMyBoardPaginatedFn = createServerFn({ method: "GET" })
 						youConfirmed: confirmedBy.includes(userId),
 						partnerConfirmed: confirmedBy.includes(partnerId),
 						role: providerUserId === userId ? "provider" : "recipient",
+						canArchivePost:
+							match.status === "completed" &&
+							bothVerified &&
+							post.status !== "archived",
 						audit: mapSolanaAudit(
 							exchangesByMatchId.get(match._id.toString())?.audit,
 						),
@@ -1272,6 +1393,17 @@ export const acceptMatchFn = createServerFn({ method: "POST" })
 				{ $set: { status: "matched", updatedAt: now } },
 			);
 
+		const names = await namesFor([userId]);
+		await createNotification(database, {
+			userId: String(match.fromUserId),
+			actorUserId: userId,
+			type: "match_accepted",
+			title: "Your reply was accepted",
+			body: `${names.get(userId) ?? "Someone"} accepted you for “${String(post.title)}”.`,
+			href: "/requests",
+			entityId: `accepted:${match._id.toString()}`,
+		});
+
 		return { id: match._id.toString(), status: "accepted" };
 	});
 
@@ -1298,7 +1430,114 @@ export const completeMatchFn = createServerFn({ method: "POST" })
 						matchId: matchId.toString(),
 					})
 				: null;
+		const match = await database
+			.collection("matches")
+			.findOne({ _id: matchId });
+		if (match) {
+			const partnerId =
+				String(match.fromUserId) === userId
+					? String(match.toUserId)
+					: String(match.fromUserId);
+			const names = await namesFor([userId]);
+			const postType: IntentKind =
+				match.postType === "offer" ? "offer" : "request";
+			const postId = await parseObjectId(String(match.postId));
+			const post = postId
+				? await database.collection(collectionFor(postType)).findOne({
+						_id: postId,
+					})
+				: null;
+			const postTitle = post ? String(post.title) : "your match";
+			const actorName = names.get(userId) ?? "Someone";
+			if (result.status === "awaiting_confirmation") {
+				await createNotification(database, {
+					userId: partnerId,
+					actorUserId: userId,
+					type: "hours_confirmed",
+					title: "Hours are waiting on you",
+					body: `${actorName} confirmed time on “${postTitle}”.`,
+					href: "/requests",
+					entityId: `hours:${match._id.toString()}:${userId}`,
+				});
+			} else if (result.status === "completed") {
+				await Promise.all(
+					[partnerId, userId].map((recipientId) =>
+						createNotification(database, {
+							userId: recipientId,
+							actorUserId: userId,
+							type: "exchange_completed",
+							title: "Both people verified the hours",
+							body: `“${postTitle}” is complete and ready to archive.`,
+							href: "/requests",
+							entityId: `completed:${match._id.toString()}:${recipientId}`,
+						}),
+					),
+				);
+			}
+		}
 		return { ...result, audit };
+	});
+
+export const archiveCompletedPostFn = createServerFn({ method: "POST" })
+	.validator(matchActionInputSchema)
+	.handler(async ({ data }) => {
+		const { isAuthenticated, userId } = await auth();
+		if (!isAuthenticated || !userId) {
+			throw new Error("You must be signed in to continue");
+		}
+
+		const matchId = await parseObjectId(data.matchId);
+		if (!matchId) throw new Error("That match could not be found");
+
+		const database = await connectToDatabase();
+		const match = await database.collection("matches").findOne({
+			_id: matchId,
+			status: "completed",
+			$or: [{ fromUserId: userId }, { toUserId: userId }],
+		});
+		if (!match) throw new Error("That completed match could not be found");
+
+		const confirmedBy = asStringArray(match.confirmedBy);
+		if (
+			!confirmedBy.includes(String(match.fromUserId)) ||
+			!confirmedBy.includes(String(match.toUserId))
+		) {
+			throw new Error("Both people must verify the exchange first");
+		}
+
+		const postId = await parseObjectId(String(match.postId));
+		if (!postId) throw new Error("That post could not be found");
+
+		const postType: IntentKind =
+			match.postType === "offer" ? "offer" : "request";
+		const ownedPost = await database
+			.collection(collectionFor(postType))
+			.findOne({
+				_id: postId,
+				userId,
+			});
+		if (ownedPost) {
+			return archiveOwnedIntent({
+				database,
+				postId,
+				postType,
+				userId,
+				allowCompleted: true,
+			});
+		}
+
+		const now = new Date();
+		await database.collection("matches").updateOne(
+			{
+				_id: matchId,
+				$or: [{ fromUserId: userId }, { toUserId: userId }],
+			},
+			{
+				$addToSet: { hiddenFromBoardBy: userId },
+				$set: { updatedAt: now },
+			},
+		);
+		return { ok: true as const, archived: true as const };
 	});
 
 export const retrySolanaAuditFn = createServerFn({ method: "POST" })

@@ -7,7 +7,6 @@ import {
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
 	CircleUser,
-	Clock3,
 	Menu,
 	Moon,
 	Search,
@@ -17,6 +16,7 @@ import {
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
+import NotificationCenter from "#/components/notification-center";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
@@ -74,10 +74,7 @@ export default function Navigation() {
 						to="/"
 						className="flex items-center gap-2.5 font-heading text-[15px] font-semibold tracking-tight"
 					>
-						<div className="flex size-8 items-center justify-center rounded-lg bg-foreground text-background">
-							<Clock3 className="size-4" />
-						</div>
-						<span>VOLGO</span>
+						<img src="https://storage.volgo.org/VOLGO.png" alt="VOLGO" className="h-13 w-auto" />
 					</Link>
 				</div>
 
@@ -109,6 +106,9 @@ export default function Navigation() {
 				</nav>
 
 				<div className="flex items-center justify-end gap-2">
+					<Show when="signed-in">
+						<NotificationCenter />
+					</Show>
 					<div className="hidden items-center gap-2 md:flex">
 						<ThemeToggle />
 						<Button

@@ -53,6 +53,7 @@ export const matchStatusSchema = z.enum([
 	"accepted",
 	"awaiting_confirmation",
 	"completed",
+	"withdrawn",
 ]);
 
 export const matchActionInputSchema = z.object({
@@ -120,10 +121,11 @@ export const activeConnectionSchema = z.object({
 	partnerName: z.string(),
 	partnerContact: privateContactSchema,
 	minutes: z.number().int().positive(),
-	status: matchStatusSchema.exclude(["pending"]),
+	status: matchStatusSchema.exclude(["pending", "withdrawn"]),
 	youConfirmed: z.boolean(),
 	partnerConfirmed: z.boolean(),
 	role: z.enum(["provider", "recipient"]),
+	canArchivePost: z.boolean(),
 	audit: solanaAuditSchema.nullable(),
 });
 

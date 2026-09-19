@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 
+import { Toaster } from "#/components/ui/toast";
 import { getOnboardingStatusFn } from "#/server/profiles";
 
 import ClerkProvider from "../integrations/clerk/provider";
@@ -60,7 +61,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			</head>
 			<body className="antialiased">
 				<ClerkProvider>
-					{children}
+					<Toaster>{children}</Toaster>
 					<TanStackDevtools
 						config={{
 							position: "bottom-right",

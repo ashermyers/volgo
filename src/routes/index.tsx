@@ -1,5 +1,10 @@
 import { auth, clerkClient } from "@clerk/tanstack-react-start/server";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	useNavigate,
+	useRouter,
+} from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import {
 	ArrowRight,
@@ -31,7 +36,12 @@ import type {
 	ConversationMessage,
 } from "#/features/intents/schema";
 import { localAnalyzeIntent } from "#/lib/clarify";
-import { getCommunityStatsFn, getDiscoverFeedFn } from "#/server/community";
+import { notifyToast } from "#/lib/notify-toast";
+import {
+	getCommunityStatsFn,
+	getDiscoverFeedFn,
+	getImpactFn,
+} from "#/server/community";
 import { analyzeIntentFn, publishIntentFn } from "#/server/intents";
 
 const authStateFn = createServerFn().handler(async () => {
@@ -51,11 +61,14 @@ export const Route = createFileRoute("/")({
 	errorComponent: PageError,
 	beforeLoad: () => authStateFn(),
 	loader: async ({ context }) => {
-		const [feed, communityStats] = await Promise.all([
+		const [feed, communityStats, impact] = await Promise.all([
 			getDiscoverFeedFn({
 				data: { filter: "all", page: 1, pageSize: 3 },
 			}),
 			getCommunityStatsFn(),
+			context.userId
+				? getImpactFn({ data: { page: 1, pageSize: 3 } })
+				: Promise.resolve(null),
 		]);
 
 		return {
@@ -63,6 +76,7 @@ export const Route = createFileRoute("/")({
 			firstName: context.firstName,
 			pulse: feed.items.slice(0, 3),
 			communityStats,
+			recentActivity: impact?.recent ?? [],
 		};
 	},
 });
@@ -343,62 +357,134 @@ function PublishedCard({ intent }: { intent: CapturedIntent }) {
 	);
 }
 
-function PulseList({ items }: { items: CommunityPost[] }) {
-	if (items.length === 0) return null;
+type RecentActivityItem = Pick<
+	CommunityPost,
+	"id" | "type" | "title" | "status"
+>;
+
+function HomeActivity({
+	community,
+	recent,
+	isSignedIn,
+}: {
+	community: CommunityPost[];
+	recent: RecentActivityItem[];
+	isSignedIn: boolean;
+}) {
+	if (community.length === 0 && !isSignedIn) return null;
 
 	return (
 		<motion.section
 			initial={{ opacity: 0, y: 10 }}
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ delay: 0.2 }}
-			className="mt-16"
+			className={`mt-6 grid gap-4 ${isSignedIn ? "lg:grid-cols-2" : ""}`}
+			aria-label="Activity overview"
 		>
-			<div className="mb-4 flex items-end justify-between gap-4">
-				<div>
-					<p className="text-sm font-medium">Happening nearby</p>
-					<p className="text-xs text-muted-foreground">
-						A quiet look at what the community is exchanging.
-					</p>
-				</div>
-				<Button
-					render={<Link to="/discover" />}
-					nativeButton={false}
-					variant="ghost"
-					size="sm"
-					className="gap-1"
-				>
-					Discover
-					<ArrowRight className="size-3.5" />
-				</Button>
-			</div>
-			<div className="divide-y rounded-2xl border bg-card/70">
-				{items.map((item) => (
-					<Link
-						key={item.id}
-						to="/discover"
-						className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/40"
-					>
-						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-							{item.type === "offer" ? (
-								<HandHeart className="size-4" />
-							) : (
-								<HelpingHand className="size-4" />
-							)}
-						</div>
-						<div className="min-w-0 flex-1">
-							<p className="truncate text-sm font-medium">{item.title}</p>
-							<p className="truncate text-xs text-muted-foreground">
-								{item.displayName}
-								{item.skills[0] ? ` · ${item.skills[0]}` : ""}
+			{isSignedIn ? (
+				<div className="overflow-hidden rounded-2xl border bg-card/70">
+					<div className="flex items-center justify-between gap-4 border-b px-4 py-3.5">
+						<div>
+							<h2 className="text-sm font-semibold">Your recent activity</h2>
+							<p className="mt-0.5 text-xs text-muted-foreground">
+								Your latest requests and offers.
 							</p>
 						</div>
-						{typeof item.matchScore === "number" ? (
-							<span className="text-xs font-medium tabular-nums text-muted-foreground">
-								{item.matchScore}
-							</span>
-						) : null}
-					</Link>
-				))}
+						<Button
+							render={
+								<Link to="/requests" search={{ filter: "all", postsPage: 1 }} />
+							}
+							nativeButton={false}
+							variant="ghost"
+							size="sm"
+							className="gap-1"
+						>
+							View all
+							<ArrowRight className="size-3.5" aria-hidden="true" />
+						</Button>
+					</div>
+					{recent.length > 0 ? (
+						<div className="divide-y">
+							{recent.map((item) => (
+								<Link
+									key={item.id}
+									to="/requests"
+									search={{ filter: "all", postsPage: 1 }}
+									className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40"
+								>
+									<div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/8 text-primary">
+										{item.type === "offer" ? (
+											<HandHeart className="size-3.5" aria-hidden="true" />
+										) : (
+											<HelpingHand className="size-3.5" aria-hidden="true" />
+										)}
+									</div>
+									<p className="min-w-0 flex-1 truncate text-sm font-medium">
+										{item.title}
+									</p>
+									<span className="rounded-full bg-muted px-2 py-1 text-[10px] font-medium capitalize text-muted-foreground">
+										{item.status}
+									</span>
+								</Link>
+							))}
+						</div>
+					) : (
+						<p className="px-4 py-6 text-center text-xs text-muted-foreground">
+							Your posts will appear here once you share one.
+						</p>
+					)}
+				</div>
+			) : null}
+
+			<div className="overflow-hidden rounded-2xl border bg-card/70">
+				<div className="flex items-center justify-between gap-4 border-b px-4 py-3.5">
+					<div>
+						<h2 className="text-sm font-semibold">Happening nearby</h2>
+						<p className="mt-0.5 text-xs text-muted-foreground">
+							What the community is exchanging now.
+						</p>
+					</div>
+					<Button
+						render={<Link to="/discover" search={{ filter: "all", page: 1 }} />}
+						nativeButton={false}
+						variant="ghost"
+						size="sm"
+						className="gap-1"
+					>
+						Discover
+						<ArrowRight className="size-3.5" aria-hidden="true" />
+					</Button>
+				</div>
+				{community.length > 0 ? (
+					<div className="divide-y">
+						{community.map((item) => (
+							<Link
+								key={item.id}
+								to="/discover"
+								search={{ filter: "all", page: 1 }}
+								className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40"
+							>
+								<div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+									{item.type === "offer" ? (
+										<HandHeart className="size-3.5" aria-hidden="true" />
+									) : (
+										<HelpingHand className="size-3.5" aria-hidden="true" />
+									)}
+								</div>
+								<div className="min-w-0 flex-1">
+									<p className="truncate text-sm font-medium">{item.title}</p>
+									<p className="truncate text-xs text-muted-foreground">
+										{item.displayName}
+									</p>
+								</div>
+							</Link>
+						))}
+					</div>
+				) : (
+					<p className="px-4 py-6 text-center text-xs text-muted-foreground">
+						The community board is quiet right now.
+					</p>
+				)}
 			</div>
 		</motion.section>
 	);
@@ -570,6 +656,7 @@ function Home() {
 	const analysisVersion = useRef(0);
 	const state = Route.useLoaderData();
 	const navigate = useNavigate();
+	const router = useRouter();
 
 	async function analyze(messages: ConversationMessage[], force = false) {
 		const version = ++analysisVersion.current;
@@ -673,6 +760,14 @@ function Home() {
 
 		try {
 			await publishIntentFn({ data: { intent: draft } });
+			notifyToast({
+				title:
+					draft.type === "offer"
+						? "Your offer is live"
+						: "Your request is live",
+				description: `“${draft.title}” is now on the community board.`,
+			});
+			await router.invalidate();
 			setPublished(draft);
 			setDraft(null);
 			setClarifying(null);
@@ -916,7 +1011,11 @@ function Home() {
 					{!draft && !isWorking && !published && !clarifying ? (
 						<>
 							<CommunityStats stats={state.communityStats} />
-							<PulseList items={state.pulse} />
+							<HomeActivity
+								community={state.pulse}
+								recent={state.recentActivity}
+								isSignedIn={Boolean(state.userId)}
+							/>
 						</>
 					) : null}
 				</div>

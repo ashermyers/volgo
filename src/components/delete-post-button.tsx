@@ -16,9 +16,15 @@ import { Button } from "#/components/ui/button";
 export default function ArchivePostButton({
 	busy,
 	onConfirm,
+	actionLabel = "Archive",
+	title = "Archive this post?",
+	description = "It will leave the community board and pending replies will pause. You can restore it later from Archived.",
 }: {
 	busy: boolean;
 	onConfirm: () => void;
+	actionLabel?: string;
+	title?: string;
+	description?: string;
 }) {
 	const [open, setOpen] = useState(false);
 
@@ -29,15 +35,12 @@ export default function ArchivePostButton({
 					<Button variant="ghost" className="w-full text-muted-foreground" />
 				}
 			>
-				Archive
+				{actionLabel}
 			</AlertDialogTrigger>
 			<AlertDialogContent>
 				<AlertDialogHeader>
-					<AlertDialogTitle>Archive this post?</AlertDialogTitle>
-					<AlertDialogDescription>
-						It will leave the community board and pending replies will pause.
-						You can restore it later from Archived.
-					</AlertDialogDescription>
+					<AlertDialogTitle>{title}</AlertDialogTitle>
+					<AlertDialogDescription>{description}</AlertDialogDescription>
 				</AlertDialogHeader>
 				<AlertDialogFooter>
 					<AlertDialogCancel>Keep active</AlertDialogCancel>
@@ -48,7 +51,7 @@ export default function ArchivePostButton({
 							setOpen(false);
 						}}
 					>
-						Archive
+						{actionLabel}
 					</AlertDialogAction>
 				</AlertDialogFooter>
 			</AlertDialogContent>

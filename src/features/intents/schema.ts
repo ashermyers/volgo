@@ -44,6 +44,14 @@ export const deleteIntentInputSchema = z.object({
 	postType: intentTypeSchema,
 });
 
+export const updateIntentInputSchema = deleteIntentInputSchema.extend({
+	title: capturedIntentSchema.shape.title,
+	description: capturedIntentSchema.shape.description,
+	skills: capturedIntentSchema.shape.skills,
+	minutes: capturedIntentSchema.shape.minutes,
+	availability: capturedIntentSchema.shape.availability,
+});
+
 export type IntentListItem = CapturedIntent & {
 	id: string;
 	status: "active" | "open" | "matched" | "completed" | "archived";

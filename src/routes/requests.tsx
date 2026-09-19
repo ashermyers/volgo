@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import {
+	Archive,
 	ArchiveRestore,
 	Check,
 	Clock3,
@@ -14,6 +15,7 @@ import { useMemo, useState } from "react";
 
 import AppShell from "#/components/app-shell";
 import ArchivePostButton from "#/components/delete-post-button";
+import EditPostDialog from "#/components/edit-post-dialog";
 import OpportunityCard, {
 	EmptyState,
 	SignInPrompt,
@@ -30,13 +32,19 @@ import type {
 	BoardItem,
 	IncomingInterest,
 } from "#/features/community/schema";
+import { notifyToast } from "#/lib/notify-toast";
 import {
 	acceptMatchFn,
+	archiveCompletedPostFn,
 	completeMatchFn,
 	getMyBoardPaginatedFn,
 	retrySolanaAuditFn,
 } from "#/server/community";
-import { archiveIntentFn, restoreIntentFn } from "#/server/intents";
+import {
+	archiveIntentFn,
+	restoreIntentFn,
+	updateIntentFn,
+} from "#/server/intents";
 
 function pageFromSearch(value: unknown) {
 	const page = typeof value === "number" ? value : Number(value);
@@ -146,6 +154,10 @@ function RequestsPage() {
 		try {
 			await acceptMatchFn({ data: { matchId: item.id } });
 			setAcceptedIds((current) => new Set(current).add(item.id));
+			notifyToast({
+				title: "Match accepted",
+				description: `${item.fromDisplayName} will see your contact details.`,
+			});
 			await router.invalidate();
 		} catch {
 			setError("We couldn't accept that yet. Please try again.");
@@ -163,9 +175,54 @@ function RequestsPage() {
 			await archiveIntentFn({
 				data: { postId: item.id, postType: item.type },
 			});
+			notifyToast({
+				title: item.status === "completed" ? "Post archived" : "Post withdrawn",
+				description:
+					item.status === "completed"
+						? "It’s off Accepted matches and saved in Archived."
+						: "It’s off the community board. You can restore it later.",
+			});
 			await router.invalidate();
 		} catch {
 			setError("We couldn't archive that yet. Please try again.");
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	async function update(
+		item: BoardItem,
+		values: {
+			title: string;
+			description: string;
+			skills: string[];
+			minutes: number | null;
+			availability: string | null;
+		},
+	) {
+		if (busyId) return;
+		setError(null);
+		setBusyId(item.id);
+		try {
+			await updateIntentFn({
+				data: {
+					postId: item.id,
+					postType: item.type,
+					...values,
+				},
+			});
+			notifyToast({
+				title: item.type === "request" ? "Request updated" : "Offer updated",
+				description: "Your changes are live on the community board.",
+			});
+			await router.invalidate();
+		} catch (caughtError) {
+			setError(
+				caughtError instanceof Error
+					? caughtError.message
+					: "We couldn't save those changes.",
+			);
+			throw caughtError;
 		} finally {
 			setBusyId(null);
 		}
@@ -179,6 +236,10 @@ function RequestsPage() {
 		try {
 			await restoreIntentFn({
 				data: { postId: item.id, postType: item.type },
+			});
+			notifyToast({
+				title: "Post restored",
+				description: "It’s back in your active requests and offers.",
 			});
 			await router.invalidate();
 		} catch {
@@ -194,7 +255,19 @@ function RequestsPage() {
 		setBusyId(connection.id);
 
 		try {
-			await completeMatchFn({ data: { matchId: connection.id } });
+			const result = await completeMatchFn({
+				data: { matchId: connection.id },
+			});
+			notifyToast({
+				title:
+					result.status === "completed"
+						? "Hours verified"
+						: "Waiting on your partner",
+				description:
+					result.status === "completed"
+						? `Both people confirmed ${connection.minutes} minutes.`
+						: `${connection.partnerName} still needs to confirm.`,
+			});
 			await router.invalidate();
 		} catch {
 			setError("We couldn't confirm those hours yet. Please try again.");
@@ -210,11 +283,34 @@ function RequestsPage() {
 
 		try {
 			await retrySolanaAuditFn({ data: { matchId: connection.id } });
+			notifyToast({
+				title: "Receipt published",
+				description: "The Solana audit trail is updating.",
+			});
 			await router.invalidate();
 		} catch {
 			setError(
 				"We couldn't publish that Solana receipt yet. Please try again.",
 			);
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	async function archiveCompleted(connection: ActiveConnection) {
+		if (busyId) return;
+		setError(null);
+		setBusyId(connection.id);
+
+		try {
+			await archiveCompletedPostFn({ data: { matchId: connection.id } });
+			notifyToast({
+				title: "Completed post archived",
+				description: "It’s off Accepted matches and saved in Archived.",
+			});
+			await router.invalidate();
+		} catch {
+			setError("We couldn't archive that post yet. Please try again.");
 		} finally {
 			setBusyId(null);
 		}
@@ -301,6 +397,7 @@ function RequestsPage() {
 											busy={busyId === connection.id}
 											onConfirm={() => void complete(connection)}
 											onRetryAudit={() => void retryAudit(connection)}
+											onArchive={() => void archiveCompleted(connection)}
 										/>
 									))}
 								</div>
@@ -381,12 +478,34 @@ function RequestsPage() {
 																	? "Restoring…"
 																	: "Restore post"}
 															</Button>
-														) : !done ? (
-															<ArchivePostButton
-																busy={busyId === item.id}
-																onConfirm={() => void archive(item)}
-															/>
-														) : null}
+														) : (
+															<div className="grid gap-2">
+																{!done ? (
+																	<EditPostDialog
+																		item={item}
+																		busy={busyId === item.id}
+																		onSave={(values) => update(item, values)}
+																	/>
+																) : null}
+																<ArchivePostButton
+																	busy={busyId === item.id}
+																	onConfirm={() => void archive(item)}
+																	actionLabel={done ? "Archive" : "Withdraw"}
+																	title={
+																		done
+																			? "Archive this completed post?"
+																			: item.type === "request"
+																				? "Withdraw this request?"
+																				: "Withdraw this offer?"
+																	}
+																	description={
+																		done
+																			? "It will leave Accepted matches and stay in your archived history."
+																			: "It will leave the community board and pause pending replies. You can restore it later."
+																	}
+																/>
+															</div>
+														)}
 													</div>
 												}
 											/>
@@ -453,11 +572,13 @@ function ConnectionCard({
 	busy,
 	onConfirm,
 	onRetryAudit,
+	onArchive,
 }: {
 	connection: ActiveConnection;
 	busy: boolean;
 	onConfirm: () => void;
 	onRetryAudit: () => void;
+	onArchive: () => void;
 }) {
 	const completed = connection.status === "completed";
 	const verifiedByBoth =
@@ -529,6 +650,18 @@ function ConnectionCard({
 							busy={busy}
 							onRetry={onRetryAudit}
 						/>
+						{verifiedByBoth ? (
+							<Button
+								variant="outline"
+								size="sm"
+								className="w-full gap-2"
+								disabled={busy}
+								onClick={onArchive}
+							>
+								<Archive className="size-4" aria-hidden="true" />
+								{busy ? "Archiving…" : "Archive completed post"}
+							</Button>
+						) : null}
 					</div>
 				) : completed ? (
 					<div className="flex items-center gap-2 text-sm text-muted-foreground">

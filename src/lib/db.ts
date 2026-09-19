@@ -38,6 +38,13 @@ async function ensureIndexes(database: Db) {
 			verifiedByBoth: 1,
 			providerUserId: 1,
 		}),
+		database
+			.collection("notifications")
+			.createIndex({ userId: 1, createdAt: -1, _id: -1 }),
+		database.collection("notifications").createIndex({ userId: 1, readAt: 1 }),
+		database
+			.collection("notifications")
+			.createIndex({ userId: 1, type: 1, entityId: 1 }, { unique: true }),
 	]);
 	indexesReady = true;
 }
