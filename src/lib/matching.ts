@@ -51,7 +51,11 @@ export function scoreOpportunity(input: MatchInput) {
 		};
 	}
 
-	const denominator = Math.max(primarySkills.length, input.postSkills.length, 1);
+	const denominator = Math.max(
+		primarySkills.length,
+		input.postSkills.length,
+		1,
+	);
 	let score = Math.round((shared.length / denominator) * 72);
 
 	if (complementary) score += 16;

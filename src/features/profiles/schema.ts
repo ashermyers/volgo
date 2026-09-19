@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { paginationInputSchema } from "#/features/pagination/schema";
+
 export const profileSchema = z.object({
 	clerkUserId: z.string(),
 	displayName: z.string(),
@@ -74,9 +76,13 @@ export const resumeSummarySchema = z.object({
 
 export type ResumeSummary = z.infer<typeof resumeSummarySchema>;
 
-export const searchCommunityInputSchema = z.object({
-	query: z.string().trim().max(80),
-});
+export const searchCommunityInputSchema = z
+	.object({
+		query: z.string().trim().max(80),
+		peoplePage: z.number().int().min(1).max(10_000).default(1),
+		postsPage: z.number().int().min(1).max(10_000).default(1),
+	})
+	.extend({ pageSize: paginationInputSchema.shape.pageSize.default(12) });
 
 export const publicProfileSchema = profileSchema.extend({
 	isSelf: z.boolean(),

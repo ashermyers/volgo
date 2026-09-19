@@ -4,6 +4,7 @@ import { createServerFn } from "@tanstack/react-start";
 import {
 	ArrowRight,
 	ArrowUp,
+	BadgeCheck,
 	CalendarClock,
 	Check,
 	Clock3,
@@ -12,11 +13,14 @@ import {
 	MessageCircleQuestion,
 	RotateCcw,
 	Sparkles,
+	Users,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useRef, useState } from "react";
 
 import AppShell from "#/components/app-shell";
+import PageError from "#/components/page-error";
+import PagePending from "#/components/page-pending";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
@@ -27,7 +31,7 @@ import type {
 	ConversationMessage,
 } from "#/features/intents/schema";
 import { localAnalyzeIntent } from "#/lib/clarify";
-import { getDiscoverFeedFn } from "#/server/community";
+import { getCommunityStatsFn, getDiscoverFeedFn } from "#/server/community";
 import { analyzeIntentFn, publishIntentFn } from "#/server/intents";
 
 const authStateFn = createServerFn().handler(async () => {
@@ -43,14 +47,22 @@ const authStateFn = createServerFn().handler(async () => {
 
 export const Route = createFileRoute("/")({
 	component: Home,
+	pendingComponent: () => <PagePending cards={3} />,
+	errorComponent: PageError,
 	beforeLoad: () => authStateFn(),
 	loader: async ({ context }) => {
-		const feed = await getDiscoverFeedFn();
+		const [feed, communityStats] = await Promise.all([
+			getDiscoverFeedFn({
+				data: { filter: "all", page: 1, pageSize: 3 },
+			}),
+			getCommunityStatsFn(),
+		]);
 
 		return {
 			userId: context.userId,
 			firstName: context.firstName,
 			pulse: feed.items.slice(0, 3),
+			communityStats,
 		};
 	},
 });
@@ -424,11 +436,8 @@ function IntentModePicker({
 	];
 
 	return (
-		<div
-			className="mb-4 grid grid-cols-2 gap-3"
-			role="group"
-			aria-label="Choose a post type"
-		>
+		<fieldset className="mb-4 grid grid-cols-2 gap-3">
+			<legend className="sr-only">Choose a post type</legend>
 			{options.map((option) => {
 				const selected = value === option.value;
 				return (
@@ -460,7 +469,86 @@ function IntentModePicker({
 					</button>
 				);
 			})}
-		</div>
+		</fieldset>
+	);
+}
+
+function CommunityStats({
+	stats,
+}: {
+	stats: {
+		activePosts: number;
+		members: number;
+		completedExchanges: number;
+		verifiedMinutes: number;
+	};
+}) {
+	const verifiedHours = stats.verifiedMinutes / 60;
+	const items = [
+		{
+			label: "Community members",
+			value: stats.members.toLocaleString(),
+			icon: <Users className="size-4" />,
+		},
+		{
+			label: "Open ways to help",
+			value: stats.activePosts.toLocaleString(),
+			icon: <HandHeart className="size-4" />,
+		},
+		{
+			label: "Verified exchanges",
+			value: stats.completedExchanges.toLocaleString(),
+			icon: <BadgeCheck className="size-4" />,
+		},
+		{
+			label: "Hours given",
+			value:
+				stats.verifiedMinutes < 60
+					? `${stats.verifiedMinutes} min`
+					: `${verifiedHours.toFixed(verifiedHours >= 10 ? 0 : 1)} hrs`,
+			icon: <Clock3 className="size-4" />,
+		},
+	];
+
+	return (
+		<motion.section
+			initial={{ opacity: 0, y: 10 }}
+			animate={{ opacity: 1, y: 0 }}
+			transition={{ delay: 0.18 }}
+			className="mt-12 overflow-hidden rounded-2xl border bg-card/70"
+			aria-labelledby="community-stats-heading"
+		>
+			<div className="flex flex-col gap-2 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+				<div>
+					<h2 id="community-stats-heading" className="text-sm font-semibold">
+						Community in motion
+					</h2>
+					<p className="mt-1 text-xs text-muted-foreground">
+						Real time shared, confirmed by both people.
+					</p>
+				</div>
+				<Link
+					to="/leaderboard"
+					search={{ page: 1 }}
+					className="text-xs font-medium text-primary hover:underline"
+				>
+					Meet the volunteers
+				</Link>
+			</div>
+			<div className="grid grid-cols-2 divide-x divide-y sm:grid-cols-4 sm:divide-y-0">
+				{items.map((item) => (
+					<div key={item.label} className="p-4">
+						<div className="flex items-center gap-2 text-muted-foreground">
+							{item.icon}
+							<span className="text-[11px]">{item.label}</span>
+						</div>
+						<p className="mt-2 font-heading text-xl font-semibold tabular-nums">
+							{item.value}
+						</p>
+					</div>
+				))}
+			</div>
+		</motion.section>
 	);
 }
 
@@ -826,7 +914,10 @@ function Home() {
 					) : null}
 
 					{!draft && !isWorking && !published && !clarifying ? (
-						<PulseList items={state.pulse} />
+						<>
+							<CommunityStats stats={state.communityStats} />
+							<PulseList items={state.pulse} />
+						</>
 					) : null}
 				</div>
 			</main>

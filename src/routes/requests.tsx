@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import {
+	ArchiveRestore,
 	Check,
 	Clock3,
 	Mail,
@@ -12,13 +13,15 @@ import { AnimatePresence, motion } from "motion/react";
 import { useMemo, useState } from "react";
 
 import AppShell from "#/components/app-shell";
-import DeletePostButton from "#/components/delete-post-button";
+import ArchivePostButton from "#/components/delete-post-button";
 import OpportunityCard, {
 	EmptyState,
 	SignInPrompt,
 } from "#/components/opportunity-card";
+import PageError from "#/components/page-error";
 import PageHeader from "#/components/page-header";
 import PagePending from "#/components/page-pending";
+import PaginationControls from "#/components/pagination-controls";
 import SegmentedControl from "#/components/segmented-control";
 import SolanaAuditStatus from "#/components/solana-audit-status";
 import { Button } from "#/components/ui/button";
@@ -30,30 +33,88 @@ import type {
 import {
 	acceptMatchFn,
 	completeMatchFn,
-	getMyBoardFn,
+	getMyBoardPaginatedFn,
 	retrySolanaAuditFn,
 } from "#/server/community";
-import { deleteIntentFn } from "#/server/intents";
+import { archiveIntentFn, restoreIntentFn } from "#/server/intents";
+
+function pageFromSearch(value: unknown) {
+	const page = typeof value === "number" ? value : Number(value);
+	return Number.isInteger(page) && page > 0 ? page : 1;
+}
 
 export const Route = createFileRoute("/requests")({
-	loader: () => getMyBoardFn(),
+	validateSearch: (
+		search: Record<string, unknown>,
+	): {
+		filter?: Filter;
+		postsPage?: number;
+		incomingPage?: number;
+		connectionsPage?: number;
+	} => ({
+		filter:
+			search.filter === "request" ||
+			search.filter === "offer" ||
+			search.filter === "archived"
+				? search.filter
+				: undefined,
+		postsPage:
+			search.postsPage === undefined
+				? undefined
+				: pageFromSearch(search.postsPage),
+		incomingPage:
+			search.incomingPage === undefined
+				? undefined
+				: pageFromSearch(search.incomingPage),
+		connectionsPage:
+			search.connectionsPage === undefined
+				? undefined
+				: pageFromSearch(search.connectionsPage),
+	}),
+	loaderDeps: ({ search }) => ({
+		filter: search.filter ?? "all",
+		postsPage: search.postsPage ?? 1,
+		incomingPage: search.incomingPage ?? 1,
+		connectionsPage: search.connectionsPage ?? 1,
+	}),
+	loader: ({ deps }) =>
+		getMyBoardPaginatedFn({
+			data: {
+				postFilter: deps.filter,
+				postsPage: deps.postsPage,
+				incomingPage: deps.incomingPage,
+				connectionsPage: deps.connectionsPage,
+				pageSize: 6,
+			},
+		}),
 	pendingComponent: () => <PagePending cards={2} />,
+	errorComponent: PageError,
 	component: RequestsPage,
 });
 
-type Filter = "all" | "request" | "offer";
+type Filter = "all" | "request" | "offer" | "archived";
 
 const filterLabels: Array<{ value: Filter; label: string }> = [
 	{ value: "all", label: "All activity" },
 	{ value: "request", label: "Help I need" },
 	{ value: "offer", label: "Help I offered" },
+	{ value: "archived", label: "Archived" },
 ];
 
 function RequestsPage() {
-	const { isAuthenticated, items, incoming, connections } =
-		Route.useLoaderData();
+	const {
+		isAuthenticated,
+		items,
+		incoming,
+		connections,
+		postsPagination,
+		incomingPagination,
+		connectionsPagination,
+	} = Route.useLoaderData();
+	const search = Route.useSearch();
+	const navigate = Route.useNavigate();
 	const router = useRouter();
-	const [filter, setFilter] = useState<Filter>("all");
+	const filter: Filter = search.filter ?? "all";
 	const [busyId, setBusyId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [acceptedIds, setAcceptedIds] = useState<Set<string>>(new Set());
@@ -63,8 +124,19 @@ function RequestsPage() {
 		[acceptedIds, incoming],
 	);
 
-	const filteredItems =
-		filter === "all" ? items : items.filter((item) => item.type === filter);
+	const filteredItems = items;
+
+	function changeFilter(nextFilter: Filter) {
+		void navigate({
+			to: "/requests",
+			search: {
+				filter: nextFilter,
+				postsPage: 1,
+				incomingPage: search.incomingPage,
+				connectionsPage: search.connectionsPage,
+			},
+		});
+	}
 
 	async function accept(item: IncomingInterest) {
 		if (busyId) return;
@@ -82,18 +154,35 @@ function RequestsPage() {
 		}
 	}
 
-	async function remove(item: BoardItem) {
+	async function archive(item: BoardItem) {
 		if (busyId) return;
 		setError(null);
 		setBusyId(item.id);
 
 		try {
-			await deleteIntentFn({
+			await archiveIntentFn({
 				data: { postId: item.id, postType: item.type },
 			});
 			await router.invalidate();
 		} catch {
-			setError("We couldn't delete that yet. Please try again.");
+			setError("We couldn't archive that yet. Please try again.");
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	async function restore(item: BoardItem) {
+		if (busyId) return;
+		setError(null);
+		setBusyId(item.id);
+
+		try {
+			await restoreIntentFn({
+				data: { postId: item.id, postType: item.type },
+			});
+			await router.invalidate();
+		} catch {
+			setError("We couldn't restore that yet. Please try again.");
 		} finally {
 			setBusyId(null);
 		}
@@ -180,6 +269,21 @@ function RequestsPage() {
 										))}
 									</AnimatePresence>
 								</div>
+								<PaginationControls
+									page={incomingPagination.page}
+									totalPages={incomingPagination.totalPages}
+									totalItems={incomingPagination.totalItems}
+									itemLabel="incoming replies"
+									onPageChange={(incomingPage) =>
+										void navigate({
+											to: "/requests",
+											search: {
+												...search,
+												incomingPage,
+											},
+										})
+									}
+								/>
 							</section>
 						) : null}
 
@@ -200,6 +304,21 @@ function RequestsPage() {
 										/>
 									))}
 								</div>
+								<PaginationControls
+									page={connectionsPagination.page}
+									totalPages={connectionsPagination.totalPages}
+									totalItems={connectionsPagination.totalItems}
+									itemLabel="accepted matches"
+									onPageChange={(connectionsPage) =>
+										void navigate({
+											to: "/requests",
+											search: {
+												...search,
+												connectionsPage,
+											},
+										})
+									}
+								/>
 							</section>
 						) : null}
 
@@ -207,7 +326,7 @@ function RequestsPage() {
 							<SegmentedControl
 								layoutId="requests-filter"
 								value={filter}
-								onChange={setFilter}
+								onChange={changeFilter}
 								options={filterLabels}
 							/>
 						</div>
@@ -217,6 +336,7 @@ function RequestsPage() {
 								<AnimatePresence mode="popLayout">
 									{filteredItems.map((item, index) => {
 										const done = item.status === "completed";
+										const archived = item.status === "archived";
 										const matched =
 											item.status === "matched" ||
 											Boolean(item.acceptedMatchId);
@@ -249,10 +369,22 @@ function RequestsPage() {
 																Matched with {item.partnerName}
 															</p>
 														) : null}
-														{!done ? (
-															<DeletePostButton
+														{archived ? (
+															<Button
+																variant="outline"
+																className="w-full gap-2"
+																disabled={busyId === item.id}
+																onClick={() => void restore(item)}
+															>
+																<ArchiveRestore className="size-4" />
+																{busyId === item.id
+																	? "Restoring…"
+																	: "Restore post"}
+															</Button>
+														) : !done ? (
+															<ArchivePostButton
 																busy={busyId === item.id}
-																onConfirm={() => void remove(item)}
+																onConfirm={() => void archive(item)}
 															/>
 														) : null}
 													</div>
@@ -266,17 +398,22 @@ function RequestsPage() {
 							<div className="mt-6">
 								<EmptyState
 									title={
-										items.length === 0
-											? "Nothing here yet"
-											: "No posts in this view"
+										filter === "archived"
+											? "No archived posts"
+											: postsPagination.totalItems === 0
+												? "Nothing here yet"
+												: "No posts in this view"
 									}
 									description={
-										items.length === 0
-											? "Describe what you need or what you can offer. VOLGO will turn it into a community-ready post."
-											: "Try another filter to see the rest of your activity."
+										filter === "archived"
+											? "Posts you archive will stay safely out of the community board until you restore them."
+											: postsPagination.totalItems === 0
+												? "Describe what you need or what you can offer. VOLGO will turn it into a community-ready post."
+												: "Try another filter to see the rest of your activity."
 									}
 									action={
-										items.length === 0 ? (
+										filter !== "archived" &&
+										postsPagination.totalItems === 0 ? (
 											<Button
 												render={<Link to="/" />}
 												nativeButton={false}
@@ -289,6 +426,21 @@ function RequestsPage() {
 								/>
 							</div>
 						)}
+						<PaginationControls
+							page={postsPagination.page}
+							totalPages={postsPagination.totalPages}
+							totalItems={postsPagination.totalItems}
+							itemLabel="posts"
+							onPageChange={(postsPage) =>
+								void navigate({
+									to: "/requests",
+									search: {
+										...search,
+										postsPage,
+									},
+								})
+							}
+						/>
 					</>
 				)}
 			</main>

@@ -1,20 +1,45 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Check, Compass, Sparkles } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import AppShell from "#/components/app-shell";
 import OpportunityCard, { EmptyState } from "#/components/opportunity-card";
+import PageError from "#/components/page-error";
 import PageHeader from "#/components/page-header";
 import PagePending from "#/components/page-pending";
+import PaginationControls from "#/components/pagination-controls";
 import SegmentedControl from "#/components/segmented-control";
 import { Button } from "#/components/ui/button";
 import type { CommunityPost } from "#/features/community/schema";
 import { expressInterestFn, getDiscoverFeedFn } from "#/server/community";
 
 export const Route = createFileRoute("/discover")({
-	loader: () => getDiscoverFeedFn(),
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { filter?: Filter; page?: number } => {
+		const page = Number(search.page);
+		return {
+			filter:
+				search.filter === "for-you" ||
+				search.filter === "request" ||
+				search.filter === "offer" ||
+				search.filter === "all"
+					? search.filter
+					: undefined,
+			page: Number.isInteger(page) && page > 0 ? page : undefined,
+		};
+	},
+	loaderDeps: ({ search }) => ({
+		filter: search.filter ?? "for-you",
+		page: search.page ?? 1,
+	}),
+	loader: ({ deps }) =>
+		getDiscoverFeedFn({
+			data: { filter: deps.filter, page: deps.page, pageSize: 12 },
+		}),
 	pendingComponent: () => <PagePending />,
+	errorComponent: PageError,
 	component: DiscoverPage,
 });
 
@@ -28,11 +53,12 @@ const filters: Array<{ value: Filter; label: string }> = [
 ];
 
 function DiscoverPage() {
-	const { isAuthenticated, items, hasProfileSignal } = Route.useLoaderData();
+	const { isAuthenticated, items, hasProfileSignal, pagination } =
+		Route.useLoaderData();
+	const search = Route.useSearch();
 	const navigate = useNavigate();
-	const [filter, setFilter] = useState<Filter>(
-		hasProfileSignal ? "for-you" : "all",
-	);
+	const filter: Filter =
+		search.filter ?? (hasProfileSignal ? "for-you" : "all");
 	const [busyId, setBusyId] = useState<string | null>(null);
 	const [sentIds, setSentIds] = useState<Set<string>>(
 		() =>
@@ -42,20 +68,18 @@ function DiscoverPage() {
 	);
 	const [error, setError] = useState<string | null>(null);
 
-	const filteredItems = useMemo(() => {
-		return items.filter((item) => {
-			if (filter === "all") return true;
-			if (filter === "request" || filter === "offer")
-				return item.type === filter;
-			return (item.matchScore ?? 0) >= 40;
-		});
-	}, [filter, items]);
-
-	const featured = filteredItems
+	const featured = items
 		.filter((item) => (item.matchScore ?? 0) >= 55 && !sentIds.has(item.id))
 		.slice(0, 2);
 	const featuredIds = new Set(featured.map((item) => item.id));
-	const rest = filteredItems.filter((item) => !featuredIds.has(item.id));
+	const rest = items.filter((item) => !featuredIds.has(item.id));
+
+	function changeFilter(nextFilter: Filter) {
+		void navigate({
+			to: "/discover",
+			search: { filter: nextFilter, page: 1 },
+		});
+	}
 
 	async function sendInterest(item: CommunityPost) {
 		if (!isAuthenticated) {
@@ -108,7 +132,7 @@ function DiscoverPage() {
 					<SegmentedControl
 						layoutId="discover-filter"
 						value={filter}
-						onChange={setFilter}
+						onChange={changeFilter}
 						options={filters}
 					/>
 				</div>
@@ -119,7 +143,7 @@ function DiscoverPage() {
 					</p>
 				) : null}
 
-				{items.length === 0 ? (
+				{pagination.totalItems === 0 ? (
 					<div className="mt-8">
 						<EmptyState
 							title="The board is still quiet"
@@ -135,7 +159,7 @@ function DiscoverPage() {
 							}
 						/>
 					</div>
-				) : filteredItems.length === 0 ? (
+				) : items.length === 0 ? (
 					<div className="mt-8">
 						<EmptyState
 							title="No matches in this view"
@@ -222,6 +246,18 @@ function DiscoverPage() {
 						</section>
 					</div>
 				)}
+				<PaginationControls
+					page={pagination.page}
+					totalPages={pagination.totalPages}
+					totalItems={pagination.totalItems}
+					itemLabel="community posts"
+					onPageChange={(page) =>
+						void navigate({
+							to: "/discover",
+							search: { filter, page },
+						})
+					}
+				/>
 			</main>
 		</AppShell>
 	);

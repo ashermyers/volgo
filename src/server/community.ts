@@ -1,18 +1,24 @@
 import { auth, clerkClient } from "@clerk/tanstack-react-start/server";
 import { createServerFn } from "@tanstack/react-start";
-import type { Document, WithId } from "mongodb";
+import type { Db, Document, WithId } from "mongodb";
 
 import {
 	type ActiveConnection,
 	auditLookupInputSchema,
 	type BoardItem,
+	boardPaginationInputSchema,
 	type CommunityPost,
+	discoverFeedInputSchema,
 	expressInterestInputSchema,
 	type IncomingInterest,
 	type LeaderboardEntry,
 	matchActionInputSchema,
 	type SolanaAudit,
 } from "#/features/community/schema";
+import {
+	paginationInputSchema,
+	paginationMeta,
+} from "#/features/pagination/schema";
 import { connectToDatabase, parseObjectId } from "#/lib/db";
 import { confirmExchange } from "#/lib/exchanges";
 import type { IntentKind } from "#/lib/matching";
@@ -116,7 +122,8 @@ function mapDocument(
 			document.status === "matched" ||
 			document.status === "completed" ||
 			document.status === "active" ||
-			document.status === "open"
+			document.status === "open" ||
+			document.status === "archived"
 				? document.status
 				: type === "offer"
 					? "active"
@@ -175,43 +182,271 @@ function buildUserContext(
 	return { offerSkills, requestSkills, minutes: minutes ?? null };
 }
 
-export const getDiscoverFeedFn = createServerFn({ method: "GET" }).handler(
-	async () => {
-		const { isAuthenticated, userId } = await auth();
-		const database = await connectToDatabase();
+function forYouRankingStages(userContext: UserContext): Document[] {
+	const normalize = (skills: string[]) => [
+		...new Set(
+			skills.map((skill) => skill.trim().toLowerCase()).filter(Boolean),
+		),
+	];
+	const offerSkills = normalize(userContext.offerSkills);
+	const requestSkills = normalize(userContext.requestSkills);
+	const allSkills = normalize([...offerSkills, ...requestSkills]);
 
-		const [offers, requests, interests] = await Promise.all([
+	return [
+		{
+			$set: {
+				__primarySkills: {
+					$switch: {
+						branches: [
+							{
+								case: {
+									$and: [
+										{ $eq: ["$__postType", "request"] },
+										{ $gt: [offerSkills.length, 0] },
+									],
+								},
+								// biome-ignore lint/suspicious/noThenProperty: MongoDB $switch branches require then.
+								then: offerSkills,
+							},
+							{
+								case: {
+									$and: [
+										{ $eq: ["$__postType", "offer"] },
+										{ $gt: [requestSkills.length, 0] },
+									],
+								},
+								// biome-ignore lint/suspicious/noThenProperty: MongoDB $switch branches require then.
+								then: requestSkills,
+							},
+						],
+						default: allSkills,
+					},
+				},
+				__complementary: {
+					$or: [
+						{
+							$and: [
+								{ $eq: ["$__postType", "request"] },
+								{ $gt: [offerSkills.length, 0] },
+							],
+						},
+						{
+							$and: [
+								{ $eq: ["$__postType", "offer"] },
+								{ $gt: [requestSkills.length, 0] },
+							],
+						},
+					],
+				},
+				__postSkills: {
+					$map: {
+						input: { $cond: [{ $isArray: "$skills" }, "$skills", []] },
+						as: "skill",
+						in: {
+							$toLower: {
+								$trim: { input: { $toString: "$$skill" } },
+							},
+						},
+					},
+				},
+				__postMinutes: {
+					$ifNull: ["$availableMinutes", "$estimatedMinutes"],
+				},
+			},
+		},
+		{
+			$set: {
+				__sharedSkills: {
+					$setIntersection: ["$__primarySkills", "$__postSkills"],
+				},
+			},
+		},
+		{
+			$set: {
+				__matchScore: {
+					$cond: [
+						{
+							$and: [
+								{ $eq: [{ $size: "$__primarySkills" }, 0] },
+								{ $eq: [{ $size: "$__postSkills" }, 0] },
+							],
+						},
+						{ $cond: ["$__complementary", 28, 14] },
+						{
+							$min: [
+								99,
+								{
+									$max: [
+										8,
+										{
+											$add: [
+												{
+													$round: [
+														{
+															$multiply: [
+																{
+																	$divide: [
+																		{ $size: "$__sharedSkills" },
+																		{
+																			$max: [
+																				{ $size: "$__primarySkills" },
+																				{ $size: "$__postSkills" },
+																				1,
+																			],
+																		},
+																	],
+																},
+																72,
+															],
+														},
+														0,
+													],
+												},
+												{ $cond: ["$__complementary", 16, 0] },
+												{
+													$cond: [
+														{
+															$and: [
+																{ $gt: ["$__postMinutes", 0] },
+																{ $gt: [userContext.minutes ?? 0, 0] },
+															],
+														},
+														{
+															$round: [
+																{
+																	$multiply: [
+																		{
+																			$subtract: [
+																				1,
+																				{
+																					$min: [
+																						1,
+																						{
+																							$divide: [
+																								{
+																									$abs: {
+																										$subtract: [
+																											"$__postMinutes",
+																											userContext.minutes ?? 0,
+																										],
+																									},
+																								},
+																								180,
+																							],
+																						},
+																					],
+																				},
+																			],
+																		},
+																		12,
+																	],
+																},
+																0,
+															],
+														},
+														0,
+													],
+												},
+											],
+										},
+									],
+								},
+							],
+						},
+					],
+				},
+			},
+		},
+		{ $sort: { __matchScore: -1, createdAt: -1, _id: -1 } },
+	];
+}
+
+function impactPostPipeline(userId: string): Document[] {
+	return [
+		{ $match: { userId, status: { $ne: "archived" } } },
+		{
+			$set: {
+				__postType: "offer",
+				__minutes: { $ifNull: ["$availableMinutes", 0] },
+				__skills: { $cond: [{ $isArray: "$skills" }, "$skills", []] },
+			},
+		},
+		{
+			$unionWith: {
+				coll: "helpRequests",
+				pipeline: [
+					{ $match: { userId, status: { $ne: "archived" } } },
+					{
+						$set: {
+							__postType: "request",
+							__minutes: { $ifNull: ["$estimatedMinutes", 0] },
+							__skills: {
+								$cond: [{ $isArray: "$skillsNeeded" }, "$skillsNeeded", []],
+							},
+						},
+					},
+				],
+			},
+		},
+	];
+}
+
+export async function readCommunityStats(database: Db) {
+	const [activeOffers, activeRequests, members, exchangeTotals] =
+		await Promise.all([
+			database.collection("offers").countDocuments({
+				status: { $in: ["active", "matched"] },
+				archivedAt: { $exists: false },
+			}),
+			database.collection("helpRequests").countDocuments({
+				status: { $in: ["open", "active", "matched"] },
+				archivedAt: { $exists: false },
+			}),
 			database
-				.collection("offers")
-				.find({
-					status: { $in: ["active", "matched"] },
-					...(userId ? { userId: { $ne: userId } } : {}),
-				})
-				.sort({ createdAt: -1 })
-				.limit(40)
-				.toArray(),
+				.collection("profiles")
+				.countDocuments({ onboardingCompleted: true }),
 			database
-				.collection("helpRequests")
-				.find({
-					status: { $in: ["open", "matched", "active"] },
-					...(userId ? { userId: { $ne: userId } } : {}),
-				})
-				.sort({ createdAt: -1 })
-				.limit(40)
+				.collection("exchanges")
+				.aggregate<{ completedExchanges: number; verifiedMinutes: number }>([
+					{ $match: { status: "completed", verifiedByBoth: true } },
+					{
+						$group: {
+							_id: null,
+							completedExchanges: { $sum: 1 },
+							verifiedMinutes: { $sum: "$minutes" },
+						},
+					},
+				])
 				.toArray(),
-			userId
-				? database
-						.collection("matches")
-						.find({ fromUserId: userId })
-						.project({ postId: 1 })
-						.toArray()
-				: Promise.resolve([]),
 		]);
 
-		const interestedIds = new Set(
-			interests.map((interest) => String(interest.postId)),
-		);
+	return {
+		activePosts: activeOffers + activeRequests,
+		members,
+		completedExchanges: exchangeTotals[0]?.completedExchanges ?? 0,
+		verifiedMinutes: exchangeTotals[0]?.verifiedMinutes ?? 0,
+	};
+}
 
+export const getCommunityStatsFn = createServerFn({ method: "GET" }).handler(
+	async () => readCommunityStats(await connectToDatabase()),
+);
+
+export const getDiscoverFeedFn = createServerFn({ method: "GET" })
+	.validator(discoverFeedInputSchema)
+	.handler(async ({ data }) => {
+		const { isAuthenticated, userId } = await auth();
+		const database = await connectToDatabase();
+		const offerFilter = {
+			status: { $in: ["active", "matched"] },
+			archivedAt: { $exists: false },
+			...(userId ? { userId: { $ne: userId } } : {}),
+		};
+		const requestFilter = {
+			status: { $in: ["open", "matched", "active"] },
+			archivedAt: { $exists: false },
+			...(userId ? { userId: { $ne: userId } } : {}),
+		};
 		let userContext: UserContext = {
 			offerSkills: [],
 			requestSkills: [],
@@ -231,78 +466,136 @@ export const getDiscoverFeedFn = createServerFn({ method: "GET" }).handler(
 			]);
 			userContext = buildUserContext(myOffers, myRequests);
 		}
+		const hasProfileSignal =
+			userContext.offerSkills.length > 0 ||
+			userContext.requestSkills.length > 0;
 
-		const names = await namesFor([
-			...offers.map((offer) => String(offer.userId)),
-			...requests.map((request) => String(request.userId)),
+		const [offerCount, requestCount] = await Promise.all([
+			data.filter === "request"
+				? Promise.resolve(0)
+				: database.collection("offers").countDocuments(offerFilter),
+			data.filter === "offer"
+				? Promise.resolve(0)
+				: database.collection("helpRequests").countDocuments(requestFilter),
 		]);
+		const pageInfo = paginationMeta({
+			page: data.page,
+			pageSize: data.pageSize,
+			totalItems: offerCount + requestCount,
+		});
+		const offset = (pageInfo.page - 1) * pageInfo.pageSize;
+		let documents: WithId<Document>[];
 
-		const items: CommunityPost[] = [
-			...offers.map((offer) => {
-				const base = mapDocument(
-					offer,
-					"offer",
-					names.get(String(offer.userId)) ?? "Community member",
-				);
-				const match = userId
-					? scoreOpportunity({
-							postType: "offer",
-							postSkills: base.skills,
-							postMinutes: base.minutes,
-							userOfferSkills: userContext.offerSkills,
-							userRequestSkills: userContext.requestSkills,
-							userMinutes: userContext.minutes,
-						})
-					: null;
+		if (data.filter === "offer") {
+			const offers = await database
+				.collection("offers")
+				.find(offerFilter)
+				.sort({ createdAt: -1, _id: -1 })
+				.skip(offset)
+				.limit(pageInfo.pageSize)
+				.toArray();
+			documents = offers.map((offer) => ({
+				...offer,
+				__postType: "offer",
+			}));
+		} else if (data.filter === "request") {
+			const requests = await database
+				.collection("helpRequests")
+				.find(requestFilter)
+				.sort({ createdAt: -1, _id: -1 })
+				.skip(offset)
+				.limit(pageInfo.pageSize)
+				.toArray();
+			documents = requests.map((request) => ({
+				...request,
+				__postType: "request",
+			}));
+		} else {
+			const rankingStages =
+				data.filter === "for-you" && hasProfileSignal
+					? forYouRankingStages(userContext)
+					: [];
+			documents = await database
+				.collection("offers")
+				.aggregate<WithId<Document>>([
+					{ $match: offerFilter },
+					{ $addFields: { __postType: "offer" } },
+					{
+						$unionWith: {
+							coll: "helpRequests",
+							pipeline: [
+								{ $match: requestFilter },
+								{ $addFields: { __postType: "request" } },
+							],
+						},
+					},
+					...rankingStages,
+					...(data.filter === "for-you" && hasProfileSignal
+						? []
+						: [{ $sort: { createdAt: -1, _id: -1 } }]),
+					{ $skip: offset },
+					{ $limit: pageInfo.pageSize },
+				])
+				.toArray();
+		}
 
-				return {
-					...base,
-					matchScore: match?.score ?? null,
-					matchExplanation: match?.explanation ?? null,
-					expressedInterest: interestedIds.has(base.id),
-				};
-			}),
-			...requests.map((request) => {
-				const base = mapDocument(
-					request,
-					"request",
-					names.get(String(request.userId)) ?? "Community member",
-				);
-				const match = userId
-					? scoreOpportunity({
-							postType: "request",
-							postSkills: base.skills,
-							postMinutes: base.minutes,
-							userOfferSkills: userContext.offerSkills,
-							userRequestSkills: userContext.requestSkills,
-							userMinutes: userContext.minutes,
-						})
-					: null;
+		const postIds = documents.map((document) => document._id.toString());
+		const [names, interests] = await Promise.all([
+			namesFor(documents.map((document) => String(document.userId))),
+			userId && postIds.length > 0
+				? database
+						.collection("matches")
+						.find({ fromUserId: userId, postId: { $in: postIds } })
+						.project({ postId: 1 })
+						.toArray()
+				: Promise.resolve([]),
+		]);
+		const interestedIds = new Set(
+			interests.map((interest) => String(interest.postId)),
+		);
+		const items: CommunityPost[] = documents.map((document) => {
+			const postType: IntentKind =
+				document.__postType === "offer" ? "offer" : "request";
+			const base = mapDocument(
+				document,
+				postType,
+				names.get(String(document.userId)) ?? "Community member",
+			);
+			const match = userId
+				? scoreOpportunity({
+						postType,
+						postSkills: base.skills,
+						postMinutes: base.minutes,
+						userOfferSkills: userContext.offerSkills,
+						userRequestSkills: userContext.requestSkills,
+						userMinutes: userContext.minutes,
+					})
+				: null;
 
-				return {
-					...base,
-					matchScore: match?.score ?? null,
-					matchExplanation: match?.explanation ?? null,
-					expressedInterest: interestedIds.has(base.id),
-				};
-			}),
-		];
+			return {
+				...base,
+				matchScore: match?.score ?? null,
+				matchExplanation: match?.explanation ?? null,
+				expressedInterest: interestedIds.has(base.id),
+			};
+		});
 
 		items.sort((left, right) => {
-			const scoreDelta = (right.matchScore ?? 0) - (left.matchScore ?? 0);
-			if (scoreDelta !== 0) return scoreDelta;
-			return right.createdAt.localeCompare(left.createdAt);
+			if (data.filter === "for-you") {
+				const scoreDelta = (right.matchScore ?? 0) - (left.matchScore ?? 0);
+				if (scoreDelta !== 0) return scoreDelta;
+			}
+			const dateDelta = right.createdAt.localeCompare(left.createdAt);
+			return dateDelta !== 0 ? dateDelta : right.id.localeCompare(left.id);
 		});
 
 		return {
 			isAuthenticated,
 			items,
-			hasProfileSignal:
-				userContext.offerSkills.length > 0 ||
-				userContext.requestSkills.length > 0,
+			hasProfileSignal,
+			pagination: pageInfo,
 		};
-	},
-);
+	});
 
 export const expressInterestFn = createServerFn({ method: "POST" })
 	.validator(expressInterestInputSchema)
@@ -321,9 +614,14 @@ export const expressInterestFn = createServerFn({ method: "POST" })
 		const database = await connectToDatabase();
 		const collectionName =
 			data.postType === "offer" ? "offers" : "helpRequests";
-		const post = await database
-			.collection(collectionName)
-			.findOne({ _id: postId });
+		const post = await database.collection(collectionName).findOne({
+			_id: postId,
+			status:
+				data.postType === "offer"
+					? { $in: ["active", "matched"] }
+					: { $in: ["open", "active", "matched"] },
+			archivedAt: { $exists: false },
+		});
 
 		if (!post) {
 			throw new Error("That post could not be found");
@@ -344,8 +642,14 @@ export const expressInterestFn = createServerFn({ method: "POST" })
 
 		const mapped = mapDocument(post, data.postType, "Community member");
 		const [myOffers, myRequests] = await Promise.all([
-			database.collection("offers").find({ userId }).toArray(),
-			database.collection("helpRequests").find({ userId }).toArray(),
+			database
+				.collection("offers")
+				.find({ userId, status: { $in: ["active", "matched"] } })
+				.toArray(),
+			database
+				.collection("helpRequests")
+				.find({ userId, status: { $in: ["open", "active", "matched"] } })
+				.toArray(),
 		]);
 		const userContext = buildUserContext(myOffers, myRequests);
 		const match = scoreOpportunity({
@@ -405,7 +709,10 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 				.toArray(),
 			database
 				.collection("matches")
-				.find({ $or: [{ toUserId: userId }, { fromUserId: userId }] })
+				.find({
+					$or: [{ toUserId: userId }, { fromUserId: userId }],
+					status: { $ne: "archived" },
+				})
 				.sort({ createdAt: -1 })
 				.toArray(),
 		]);
@@ -584,6 +891,313 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 	},
 );
 
+export const getMyBoardPaginatedFn = createServerFn({ method: "GET" })
+	.validator(boardPaginationInputSchema)
+	.handler(async ({ data }) => {
+		const { isAuthenticated, userId } = await auth();
+		const emptyPagination = paginationMeta({
+			page: 1,
+			pageSize: data.pageSize,
+			totalItems: 0,
+		});
+		if (!isAuthenticated || !userId) {
+			return {
+				isAuthenticated: false,
+				items: [] as BoardItem[],
+				incoming: [] as IncomingInterest[],
+				connections: [] as ActiveConnection[],
+				postsPagination: emptyPagination,
+				incomingPagination: emptyPagination,
+				connectionsPagination: emptyPagination,
+			};
+		}
+
+		const database = await connectToDatabase();
+		const postStatusFilter =
+			data.postFilter === "archived"
+				? { $eq: "archived" }
+				: { $ne: "archived" };
+		const offerFilter = {
+			userId,
+			status: postStatusFilter,
+			...(data.postFilter === "request" ? { _id: { $exists: false } } : {}),
+		};
+		const requestFilter = {
+			userId,
+			status: postStatusFilter,
+			...(data.postFilter === "offer" ? { _id: { $exists: false } } : {}),
+		};
+		const connectionFilter = {
+			$or: [{ toUserId: userId }, { fromUserId: userId }],
+			status: { $in: ["accepted", "awaiting_confirmation", "completed"] },
+		};
+		const [offerCount, requestCount, incomingCount, connectionCount] =
+			await Promise.all([
+				database.collection("offers").countDocuments(offerFilter),
+				database.collection("helpRequests").countDocuments(requestFilter),
+				database
+					.collection("matches")
+					.countDocuments({ toUserId: userId, status: "pending" }),
+				database.collection("matches").countDocuments(connectionFilter),
+			]);
+		const postsPagination = paginationMeta({
+			page: data.postsPage,
+			pageSize: data.pageSize,
+			totalItems: offerCount + requestCount,
+		});
+		const incomingPagination = paginationMeta({
+			page: data.incomingPage,
+			pageSize: data.pageSize,
+			totalItems: incomingCount,
+		});
+		const connectionsPagination = paginationMeta({
+			page: data.connectionsPage,
+			pageSize: data.pageSize,
+			totalItems: connectionCount,
+		});
+
+		const [postDocuments, incomingMatches, activeMatches] = await Promise.all([
+			database
+				.collection("offers")
+				.aggregate<WithId<Document>>([
+					{ $match: offerFilter },
+					{ $addFields: { __postType: "offer" } },
+					{
+						$unionWith: {
+							coll: "helpRequests",
+							pipeline: [
+								{ $match: requestFilter },
+								{ $addFields: { __postType: "request" } },
+							],
+						},
+					},
+					{ $sort: { createdAt: -1, _id: -1 } },
+					{
+						$skip: (postsPagination.page - 1) * postsPagination.pageSize,
+					},
+					{ $limit: postsPagination.pageSize },
+				])
+				.toArray(),
+			database
+				.collection("matches")
+				.find({ toUserId: userId, status: "pending" })
+				.sort({ createdAt: -1, _id: -1 })
+				.skip((incomingPagination.page - 1) * incomingPagination.pageSize)
+				.limit(incomingPagination.pageSize)
+				.toArray(),
+			database
+				.collection("matches")
+				.find(connectionFilter)
+				.sort({ updatedAt: -1, createdAt: -1, _id: -1 })
+				.skip((connectionsPagination.page - 1) * connectionsPagination.pageSize)
+				.limit(connectionsPagination.pageSize)
+				.toArray(),
+		]);
+
+		const posts = postDocuments.map((document) =>
+			mapDocument(
+				document,
+				document.__postType === "offer" ? "offer" : "request",
+				"You",
+			),
+		);
+		const postIds = posts.map((post) => post.id);
+		const relatedMatches =
+			postIds.length > 0
+				? await database
+						.collection("matches")
+						.find({
+							postId: { $in: postIds },
+							toUserId: userId,
+							status: { $ne: "archived" },
+						})
+						.toArray()
+				: [];
+		const allIncomingMatches = [
+			...relatedMatches,
+			...incomingMatches.filter(
+				(match) =>
+					!relatedMatches.some((related) => related._id.equals(match._id)),
+			),
+		];
+		const incomingNames = await namesFor(
+			allIncomingMatches.map((match) => String(match.fromUserId)),
+		);
+		const incomingPostIds = [
+			...new Set(incomingMatches.map((match) => String(match.postId))),
+		];
+		const incomingPosts = await Promise.all(
+			incomingPostIds.map(async (postIdValue) => {
+				const match = incomingMatches.find(
+					(item) => String(item.postId) === postIdValue,
+				);
+				const postId = await parseObjectId(postIdValue);
+				if (!match || !postId) return null;
+				const postType: IntentKind =
+					match.postType === "offer" ? "offer" : "request";
+				const document = await database
+					.collection(collectionFor(postType))
+					.findOne({ _id: postId });
+				return document ? mapDocument(document, postType, "You") : null;
+			}),
+		);
+		const postsById = new Map([
+			...posts.map((post) => [post.id, post] as const),
+			...incomingPosts.flatMap((post) =>
+				post ? ([[post.id, post]] as const) : [],
+			),
+		]);
+		const mapIncoming = (match: WithId<Document>) => {
+			const post = postsById.get(String(match.postId));
+			if (!post) return null;
+			const status =
+				match.status === "accepted" ||
+				match.status === "awaiting_confirmation" ||
+				match.status === "completed"
+					? match.status
+					: "pending";
+			return {
+				id: match._id.toString(),
+				postId: post.id,
+				postType: post.type,
+				postTitle: post.title,
+				fromDisplayName:
+					incomingNames.get(String(match.fromUserId)) ?? "Community member",
+				score: typeof match.score === "number" ? match.score : 0,
+				explanation: asNullableString(match.explanation),
+				status,
+				createdAt: toIsoDate(match.createdAt),
+			} satisfies IncomingInterest;
+		};
+		const relatedIncoming = relatedMatches
+			.map(mapIncoming)
+			.filter((item): item is IncomingInterest => item !== null);
+		const incoming = incomingMatches
+			.map(mapIncoming)
+			.filter((item): item is IncomingInterest => item !== null);
+		const items: BoardItem[] = posts.map((post) => {
+			const related = relatedIncoming.filter((item) => item.postId === post.id);
+			const accepted = related.find(
+				(item) =>
+					item.status === "accepted" || item.status === "awaiting_confirmation",
+			);
+			const completed = related.find((item) => item.status === "completed");
+			const partner = completed ?? accepted ?? null;
+			return {
+				id: post.id,
+				type: post.type,
+				title: post.title,
+				description: post.description,
+				skills: post.skills,
+				minutes: post.minutes,
+				availability: post.availability,
+				status: post.status,
+				createdAt: post.createdAt,
+				incomingCount: related.filter((item) => item.status === "pending")
+					.length,
+				partnerName: partner?.fromDisplayName ?? null,
+				acceptedMatchId: accepted?.id ?? completed?.id ?? null,
+			};
+		});
+
+		const partnerIds = activeMatches.map((match) =>
+			String(match.fromUserId) === userId
+				? String(match.toUserId)
+				: String(match.fromUserId),
+		);
+		const [activeNames, partnerProfiles, connectionPosts, activeExchanges] =
+			await Promise.all([
+				namesFor(partnerIds),
+				database
+					.collection("profiles")
+					.find({ clerkUserId: { $in: partnerIds } })
+					.toArray(),
+				Promise.all(
+					activeMatches.map(async (match) => {
+						const postId = await parseObjectId(String(match.postId));
+						if (!postId) return null;
+						const postType: IntentKind =
+							match.postType === "offer" ? "offer" : "request";
+						return database
+							.collection(collectionFor(postType))
+							.findOne({ _id: postId });
+					}),
+				),
+				database
+					.collection("exchanges")
+					.find({
+						matchId: {
+							$in: activeMatches.map((match) => match._id.toString()),
+						},
+					})
+					.toArray(),
+			]);
+		const profilesById = new Map(
+			partnerProfiles.map((profile) => [String(profile.clerkUserId), profile]),
+		);
+		const exchangesByMatchId = new Map(
+			activeExchanges.map((exchange) => [String(exchange.matchId), exchange]),
+		);
+		const connections: ActiveConnection[] = activeMatches.flatMap(
+			(match, index) => {
+				const post = connectionPosts[index];
+				if (!post) return [];
+				const fromUserId = String(match.fromUserId);
+				const toUserId = String(match.toUserId);
+				const partnerId = fromUserId === userId ? toUserId : fromUserId;
+				const profile = profilesById.get(partnerId);
+				const confirmedBy = asStringArray(match.confirmedBy);
+				const postType: IntentKind =
+					match.postType === "offer" ? "offer" : "request";
+				const providerUserId = postType === "request" ? fromUserId : toUserId;
+				return [
+					{
+						id: match._id.toString(),
+						postTitle: String(post.title),
+						postType,
+						partnerName: activeNames.get(partnerId) ?? "Community member",
+						partnerContact: {
+							phone:
+								typeof profile?.contactPhone === "string"
+									? profile.contactPhone
+									: null,
+							email:
+								typeof profile?.contactEmail === "string"
+									? profile.contactEmail
+									: null,
+						},
+						minutes:
+							asNullableNumber(post.availableMinutes) ??
+							asNullableNumber(post.estimatedMinutes) ??
+							60,
+						status:
+							match.status === "completed"
+								? "completed"
+								: match.status === "awaiting_confirmation"
+									? "awaiting_confirmation"
+									: "accepted",
+						youConfirmed: confirmedBy.includes(userId),
+						partnerConfirmed: confirmedBy.includes(partnerId),
+						role: providerUserId === userId ? "provider" : "recipient",
+						audit: mapSolanaAudit(
+							exchangesByMatchId.get(match._id.toString())?.audit,
+						),
+					},
+				];
+			},
+		);
+
+		return {
+			isAuthenticated: true,
+			items,
+			incoming,
+			connections,
+			postsPagination,
+			incomingPagination,
+			connectionsPagination,
+		};
+	});
+
 export const acceptMatchFn = createServerFn({ method: "POST" })
 	.validator(matchActionInputSchema)
 	.handler(async ({ data }) => {
@@ -607,8 +1221,15 @@ export const acceptMatchFn = createServerFn({ method: "POST" })
 			throw new Error("That match could not be found");
 		}
 
-		if (match.status === "accepted" || match.status === "completed") {
+		if (
+			match.status === "accepted" ||
+			match.status === "awaiting_confirmation" ||
+			match.status === "completed"
+		) {
 			return { id: match._id.toString(), status: String(match.status) };
+		}
+		if (match.status !== "pending") {
+			throw new Error("That reply is no longer active");
 		}
 
 		const postType: IntentKind =
@@ -617,9 +1238,11 @@ export const acceptMatchFn = createServerFn({ method: "POST" })
 		if (!postId) {
 			throw new Error("That post could not be found");
 		}
-		const post = await database
-			.collection(collectionFor(postType))
-			.findOne({ _id: postId });
+		const post = await database.collection(collectionFor(postType)).findOne({
+			_id: postId,
+			status: { $ne: "archived" },
+			archivedAt: { $exists: false },
+		});
 
 		if (!post || String(post.userId) !== userId) {
 			throw new Error("That post could not be found");
@@ -743,9 +1366,15 @@ export const getPublicAuditReceiptFn = createServerFn({ method: "GET" })
 		};
 	});
 
-export const getImpactFn = createServerFn({ method: "GET" }).handler(
-	async () => {
+export const getImpactFn = createServerFn({ method: "GET" })
+	.validator(paginationInputSchema)
+	.handler(async ({ data }) => {
 		const { isAuthenticated, userId } = await auth();
+		const emptyPagination = paginationMeta({
+			page: 1,
+			pageSize: data.pageSize,
+			totalItems: 0,
+		});
 
 		if (!isAuthenticated || !userId) {
 			return {
@@ -757,6 +1386,7 @@ export const getImpactFn = createServerFn({ method: "GET" }).handler(
 				auditedMinutes: 0,
 				availableCredits: 0,
 				skills: [] as string[],
+				pagination: emptyPagination,
 				recent: [] as Array<{
 					id: string;
 					type: IntentKind;
@@ -772,97 +1402,149 @@ export const getImpactFn = createServerFn({ method: "GET" }).handler(
 		}
 
 		const database = await connectToDatabase();
-		const [offers, requests, matches, exchanges, profile] = await Promise.all([
-			database
-				.collection("offers")
-				.find({ userId })
-				.sort({ createdAt: -1 })
-				.toArray(),
-			database
-				.collection("helpRequests")
-				.find({ userId })
-				.sort({ createdAt: -1 })
-				.toArray(),
-			database
-				.collection("matches")
-				.find({ $or: [{ fromUserId: userId }, { toUserId: userId }] })
-				.toArray(),
-			database
-				.collection("exchanges")
-				.find({
-					status: "completed",
-					verifiedByBoth: true,
-					$or: [{ providerUserId: userId }, { recipientUserId: userId }],
-				})
-				.toArray(),
-			database.collection("profiles").findOne({ clerkUserId: userId }),
-		]);
-
-		const people = new Set<string>();
-		for (const match of matches) {
-			if (typeof match.fromUserId === "string" && match.fromUserId !== userId) {
-				people.add(match.fromUserId);
-			}
-			if (typeof match.toUserId === "string" && match.toUserId !== userId) {
-				people.add(match.toUserId);
-			}
-		}
-
-		const mappedOffers = offers.map((offer) =>
-			mapDocument(offer, "offer", "You"),
-		);
-		const mappedRequests = requests.map((request) =>
-			mapDocument(request, "request", "You"),
-		);
-		const recent = [...mappedOffers, ...mappedRequests]
-			.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-			.slice(0, 6)
+		const [postSummary, peopleResult, exchangeSummary, profile] =
+			await Promise.all([
+				database
+					.collection("offers")
+					.aggregate<{
+						posts: number;
+						minutesPledged: number;
+						skillArrays: string[][];
+					}>([
+						...impactPostPipeline(userId),
+						{
+							$group: {
+								_id: null,
+								posts: { $sum: 1 },
+								minutesPledged: { $sum: "$__minutes" },
+								skillArrays: { $push: "$__skills" },
+							},
+						},
+					])
+					.toArray(),
+				database
+					.collection("matches")
+					.aggregate<{ total: number }>([
+						{ $match: { $or: [{ fromUserId: userId }, { toUserId: userId }] } },
+						{
+							$project: {
+								otherUserId: {
+									$cond: [
+										{ $eq: ["$fromUserId", userId] },
+										"$toUserId",
+										"$fromUserId",
+									],
+								},
+							},
+						},
+						{ $match: { otherUserId: { $type: "string", $ne: userId } } },
+						{ $group: { _id: "$otherUserId" } },
+						{ $count: "total" },
+					])
+					.toArray(),
+				database
+					.collection("exchanges")
+					.aggregate<{ verifiedMinutes: number; auditedMinutes: number }>([
+						{
+							$match: {
+								status: "completed",
+								verifiedByBoth: true,
+								$or: [{ providerUserId: userId }, { recipientUserId: userId }],
+							},
+						},
+						{
+							$group: {
+								_id: null,
+								verifiedMinutes: { $sum: "$minutes" },
+								auditedMinutes: {
+									$sum: {
+										$cond: [
+											{ $eq: ["$audit.status", "confirmed"] },
+											"$minutes",
+											0,
+										],
+									},
+								},
+							},
+						},
+					])
+					.toArray(),
+				database.collection("profiles").findOne({ clerkUserId: userId }),
+			]);
+		const summary = postSummary[0];
+		const pageInfo = paginationMeta({
+			page: data.page,
+			pageSize: data.pageSize,
+			totalItems: summary?.posts ?? 0,
+		});
+		const recentDocuments = await database
+			.collection("offers")
+			.aggregate<WithId<Document>>([
+				...impactPostPipeline(userId),
+				{ $sort: { createdAt: -1, _id: -1 } },
+				{ $skip: (pageInfo.page - 1) * pageInfo.pageSize },
+				{ $limit: pageInfo.pageSize },
+			])
+			.toArray();
+		const recent = recentDocuments
+			.map((document) =>
+				mapDocument(
+					document,
+					document.__postType === "offer" ? "offer" : "request",
+					"You",
+				),
+			)
 			.map(({ userId: _userId, displayName: _displayName, ...item }) => item);
-
-		const minutesPledged = [...offers, ...requests].reduce((total, item) => {
-			const minutes =
-				asNullableNumber(item.availableMinutes) ??
-				asNullableNumber(item.estimatedMinutes) ??
-				0;
-			return total + minutes;
-		}, 0);
-		const verifiedMinutes = exchanges.reduce(
-			(total, exchange) =>
-				total + (typeof exchange.minutes === "number" ? exchange.minutes : 0),
-			0,
-		);
-		const auditedMinutes = exchanges.reduce(
-			(total, exchange) =>
-				exchange.audit?.status === "confirmed" &&
-				typeof exchange.minutes === "number"
-					? total + exchange.minutes
-					: total,
-			0,
-		);
 
 		return {
 			isAuthenticated: true,
-			posts: offers.length + requests.length,
-			peopleReached: people.size,
-			minutesPledged,
-			verifiedMinutes,
-			auditedMinutes,
+			posts: summary?.posts ?? 0,
+			peopleReached: peopleResult[0]?.total ?? 0,
+			minutesPledged: summary?.minutesPledged ?? 0,
+			verifiedMinutes: exchangeSummary[0]?.verifiedMinutes ?? 0,
+			auditedMinutes: exchangeSummary[0]?.auditedMinutes ?? 0,
 			availableCredits:
 				typeof profile?.availableCredits === "number"
 					? profile.availableCredits
 					: 0,
-			skills: uniqueSkills([
-				...offers.flatMap((offer) => asStringArray(offer.skills)),
-				...requests.flatMap((request) => asStringArray(request.skillsNeeded)),
-			]).slice(0, 12),
+			pagination: pageInfo,
+			skills: uniqueSkills(summary?.skillArrays.flat() ?? []).slice(0, 12),
 			recent,
 		};
-	},
-);
+	});
 
-export const getLeaderboardFn = createServerFn({ method: "GET" }).handler(
-	async () => {
+export const getLeaderboardFn = createServerFn({ method: "GET" })
+	.validator(paginationInputSchema)
+	.handler(async ({ data }) => {
 		const database = await connectToDatabase();
+		const basePipeline: Document[] = [
+			{ $match: { status: "completed", verifiedByBoth: true } },
+			{
+				$group: {
+					_id: "$providerUserId",
+					verifiedMinutes: { $sum: "$minutes" },
+					exchanges: { $sum: 1 },
+				},
+			},
+			{
+				$lookup: {
+					from: "profiles",
+					localField: "_id",
+					foreignField: "clerkUserId",
+					as: "profile",
+				},
+			},
+			{ $match: { "profile.discoverable": { $ne: false } } },
+		];
+		const countResult = await database
+			.collection("exchanges")
+			.aggregate<{ total: number }>([...basePipeline, { $count: "total" }])
+			.toArray();
+		const pageInfo = paginationMeta({
+			page: data.page,
+			pageSize: data.pageSize,
+			totalItems: countResult[0]?.total ?? 0,
+		});
 		const totals = await database
 			.collection("exchanges")
 			.aggregate<{
@@ -870,21 +1552,17 @@ export const getLeaderboardFn = createServerFn({ method: "GET" }).handler(
 				verifiedMinutes: number;
 				exchanges: number;
 			}>([
-				{ $match: { status: "completed", verifiedByBoth: true } },
-				{
-					$group: {
-						_id: "$providerUserId",
-						verifiedMinutes: { $sum: "$minutes" },
-						exchanges: { $sum: 1 },
-					},
-				},
+				...basePipeline,
 				{ $sort: { verifiedMinutes: -1, exchanges: -1 } },
-				{ $limit: 25 },
+				{ $skip: (pageInfo.page - 1) * pageInfo.pageSize },
+				{ $limit: pageInfo.pageSize },
 			])
 			.toArray();
 
 		const userIds = totals.map((item) => String(item._id)).filter(Boolean);
-		if (userIds.length === 0) return { entries: [] as LeaderboardEntry[] };
+		if (userIds.length === 0) {
+			return { entries: [] as LeaderboardEntry[], pagination: pageInfo };
+		}
 
 		const [profiles, names] = await Promise.all([
 			database
@@ -897,15 +1575,11 @@ export const getLeaderboardFn = createServerFn({ method: "GET" }).handler(
 			profiles.map((profile) => [String(profile.clerkUserId), profile]),
 		);
 
-		const visible = totals.filter((item) => {
-			const profile = profilesById.get(String(item._id));
-			return profile?.discoverable !== false;
-		});
-		const entries: LeaderboardEntry[] = visible.map((item, index) => {
+		const entries: LeaderboardEntry[] = totals.map((item, index) => {
 			const userId = String(item._id);
 			const profile = profilesById.get(userId);
 			return {
-				rank: index + 1,
+				rank: (pageInfo.page - 1) * pageInfo.pageSize + index + 1,
 				userId,
 				displayName:
 					(typeof profile?.displayName === "string" &&
@@ -918,6 +1592,5 @@ export const getLeaderboardFn = createServerFn({ method: "GET" }).handler(
 			};
 		});
 
-		return { entries };
-	},
-);
+		return { entries, pagination: pageInfo };
+	});

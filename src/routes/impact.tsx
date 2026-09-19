@@ -15,15 +15,25 @@ import OpportunityCard, {
 	EmptyState,
 	SignInPrompt,
 } from "#/components/opportunity-card";
+import PageError from "#/components/page-error";
 import PageHeader from "#/components/page-header";
 import PagePending from "#/components/page-pending";
+import PaginationControls from "#/components/pagination-controls";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { getImpactFn } from "#/server/community";
 
 export const Route = createFileRoute("/impact")({
-	loader: () => getImpactFn(),
+	validateSearch: (search: Record<string, unknown>): { page?: number } => {
+		const page = Number(search.page);
+		return {
+			page: Number.isInteger(page) && page > 0 ? page : undefined,
+		};
+	},
+	loaderDeps: ({ search }) => ({ page: search.page ?? 1 }),
+	loader: ({ deps }) => getImpactFn({ data: { page: deps.page, pageSize: 6 } }),
 	pendingComponent: () => <PagePending cards={2} />,
+	errorComponent: PageError,
 	component: ImpactPage,
 });
 
@@ -35,6 +45,7 @@ function formatHours(minutes: number) {
 
 function ImpactPage() {
 	const data = Route.useLoaderData();
+	const navigate = Route.useNavigate();
 
 	return (
 		<AppShell>
@@ -150,6 +161,15 @@ function ImpactPage() {
 									}
 								/>
 							)}
+							<PaginationControls
+								page={data.pagination.page}
+								totalPages={data.pagination.totalPages}
+								totalItems={data.pagination.totalItems}
+								itemLabel="activity posts"
+								onPageChange={(page) =>
+									void navigate({ to: "/impact", search: { page } })
+								}
+							/>
 						</section>
 					</>
 				)}

@@ -5,6 +5,7 @@ import { createServerFn } from "@tanstack/react-start";
 import type { Document, WithId } from "mongodb";
 
 import type { CommunityPost } from "#/features/community/schema";
+import { paginationMeta } from "#/features/pagination/schema";
 import {
 	onboardingInputSchema,
 	type PublicProfile,
@@ -402,13 +403,13 @@ export const getPublicProfileFn = createServerFn({ method: "GET" })
 		const [offers, requests] = await Promise.all([
 			database
 				.collection("offers")
-				.find({ userId: data.userId })
+				.find({ userId: data.userId, status: { $ne: "archived" } })
 				.sort({ createdAt: -1 })
 				.limit(8)
 				.toArray(),
 			database
 				.collection("helpRequests")
-				.find({ userId: data.userId })
+				.find({ userId: data.userId, status: { $ne: "archived" } })
 				.sort({ createdAt: -1 })
 				.limit(8)
 				.toArray(),
@@ -812,4 +813,150 @@ export const searchCommunityFn = createServerFn({ method: "POST" })
 			people: [...peopleById.values()].slice(0, 24),
 			posts: query ? posts : [],
 		};
+	});
+
+export const searchCommunityPaginatedFn = createServerFn({ method: "POST" })
+	.validator(searchCommunityInputSchema)
+	.handler(async ({ data }) => {
+		const query = data.query.trim();
+		const database = await connectToDatabase();
+		const profileFilter = query
+			? {
+					discoverable: { $ne: false },
+					$or: [
+						{ displayName: { $regex: escapeRegex(query), $options: "i" } },
+						{ bio: { $regex: escapeRegex(query), $options: "i" } },
+						{ skills: { $regex: escapeRegex(query), $options: "i" } },
+						{ interests: { $regex: escapeRegex(query), $options: "i" } },
+						{ campusArea: { $regex: escapeRegex(query), $options: "i" } },
+					],
+				}
+			: { discoverable: { $ne: false } };
+		const offerText = query
+			? {
+					$or: [
+						{ title: { $regex: escapeRegex(query), $options: "i" } },
+						{ description: { $regex: escapeRegex(query), $options: "i" } },
+						{ skills: { $regex: escapeRegex(query), $options: "i" } },
+						{ displayName: { $regex: escapeRegex(query), $options: "i" } },
+					],
+				}
+			: {};
+		const requestText = query
+			? {
+					$or: [
+						{ title: { $regex: escapeRegex(query), $options: "i" } },
+						{ description: { $regex: escapeRegex(query), $options: "i" } },
+						{ skillsNeeded: { $regex: escapeRegex(query), $options: "i" } },
+						{ displayName: { $regex: escapeRegex(query), $options: "i" } },
+					],
+				}
+			: {};
+		const offerFilter = {
+			status: { $in: ["active", "matched"] },
+			archivedAt: { $exists: false },
+			...offerText,
+		};
+		const requestFilter = {
+			status: { $in: ["open", "matched", "active"] },
+			archivedAt: { $exists: false },
+			...requestText,
+		};
+		const [peopleCount, offerCount, requestCount] = await Promise.all([
+			database.collection("profiles").countDocuments(profileFilter),
+			query
+				? database.collection("offers").countDocuments(offerFilter)
+				: Promise.resolve(0),
+			query
+				? database.collection("helpRequests").countDocuments(requestFilter)
+				: Promise.resolve(0),
+		]);
+		const peoplePagination = paginationMeta({
+			page: data.peoplePage,
+			pageSize: data.pageSize,
+			totalItems: peopleCount,
+		});
+		const postsPagination = paginationMeta({
+			page: data.postsPage,
+			pageSize: data.pageSize,
+			totalItems: offerCount + requestCount,
+		});
+		const profiles = await database
+			.collection("profiles")
+			.find(profileFilter)
+			.sort({ displayName: 1, _id: 1 })
+			.skip((peoplePagination.page - 1) * peoplePagination.pageSize)
+			.limit(peoplePagination.pageSize)
+			.toArray();
+		const people = profiles.map((profile) =>
+			mapProfile(
+				profile,
+				String(profile.clerkUserId),
+				typeof profile.displayName === "string"
+					? profile.displayName
+					: "Community member",
+			),
+		);
+		const documents = query
+			? await database
+					.collection("offers")
+					.aggregate<WithId<Document>>([
+						{ $match: offerFilter },
+						{ $addFields: { __postType: "offer" } },
+						{
+							$unionWith: {
+								coll: "helpRequests",
+								pipeline: [
+									{ $match: requestFilter },
+									{ $addFields: { __postType: "request" } },
+								],
+							},
+						},
+						{ $sort: { createdAt: -1, _id: -1 } },
+						{
+							$skip: (postsPagination.page - 1) * postsPagination.pageSize,
+						},
+						{ $limit: postsPagination.pageSize },
+					])
+					.toArray()
+			: [];
+		const posts = documents.map((document) => {
+			const type: "offer" | "request" =
+				document.__postType === "offer" ? "offer" : "request";
+			const rawMinutes =
+				type === "offer"
+					? document.availableMinutes
+					: document.estimatedMinutes;
+			return {
+				id: document._id.toString(),
+				type,
+				title: String(document.title),
+				description: String(document.description),
+				skills: asStringArray(
+					type === "offer" ? document.skills : document.skillsNeeded,
+				),
+				minutes: typeof rawMinutes === "number" ? rawMinutes : null,
+				availability:
+					typeof document.availability === "string"
+						? document.availability
+						: null,
+				status:
+					document.status === "matched"
+						? ("matched" as const)
+						: type === "offer"
+							? ("active" as const)
+							: ("open" as const),
+				createdAt:
+					document.createdAt instanceof Date
+						? document.createdAt.toISOString()
+						: new Date(String(document.createdAt)).toISOString(),
+				userId: String(document.userId),
+				displayName:
+					typeof document.displayName === "string"
+						? document.displayName
+						: "Community member",
+			};
+		});
+
+		return { query, people, posts, peoplePagination, postsPagination };
 	});

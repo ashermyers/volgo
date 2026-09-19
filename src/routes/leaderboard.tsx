@@ -4,16 +4,27 @@ import { motion } from "motion/react";
 
 import AppShell from "#/components/app-shell";
 import { EmptyState } from "#/components/opportunity-card";
+import PageError from "#/components/page-error";
 import PageHeader from "#/components/page-header";
 import PagePending from "#/components/page-pending";
+import PaginationControls from "#/components/pagination-controls";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import type { LeaderboardEntry } from "#/features/community/schema";
 import { getLeaderboardFn } from "#/server/community";
 
 export const Route = createFileRoute("/leaderboard")({
-	loader: () => getLeaderboardFn(),
+	validateSearch: (search: Record<string, unknown>): { page?: number } => {
+		const page = Number(search.page);
+		return {
+			page: Number.isInteger(page) && page > 0 ? page : undefined,
+		};
+	},
+	loaderDeps: ({ search }) => ({ page: search.page ?? 1 }),
+	loader: ({ deps }) =>
+		getLeaderboardFn({ data: { page: deps.page, pageSize: 10 } }),
 	pendingComponent: () => <PagePending cards={3} />,
+	errorComponent: PageError,
 	component: LeaderboardPage,
 });
 
@@ -31,7 +42,8 @@ function rankStyle(rank: number) {
 }
 
 function LeaderboardPage() {
-	const { entries } = Route.useLoaderData();
+	const { entries, pagination } = Route.useLoaderData();
+	const navigate = Route.useNavigate();
 
 	return (
 		<AppShell>
@@ -55,6 +67,15 @@ function LeaderboardPage() {
 						<p className="pt-3 text-center text-xs text-muted-foreground">
 							Rankings use only service time confirmed by both participants.
 						</p>
+						<PaginationControls
+							page={pagination.page}
+							totalPages={pagination.totalPages}
+							totalItems={pagination.totalItems}
+							itemLabel="volunteers"
+							onPageChange={(page) =>
+								void navigate({ to: "/leaderboard", search: { page } })
+							}
+						/>
 					</div>
 				) : (
 					<div className="mt-12">

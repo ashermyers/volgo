@@ -4,41 +4,90 @@ import { type FormEvent, useEffect, useState } from "react";
 
 import AppShell from "#/components/app-shell";
 import OpportunityCard, { EmptyState } from "#/components/opportunity-card";
+import PageError from "#/components/page-error";
 import PageHeader from "#/components/page-header";
 import PagePending from "#/components/page-pending";
+import PaginationControls from "#/components/pagination-controls";
 import SegmentedControl from "#/components/segmented-control";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
-import { searchCommunityFn } from "#/server/profiles";
+import { searchCommunityPaginatedFn } from "#/server/profiles";
+
+function pageFromSearch(value: unknown) {
+	const page = typeof value === "number" ? value : Number(value);
+	return Number.isInteger(page) && page > 0 ? page : 1;
+}
 
 export const Route = createFileRoute("/search")({
-	validateSearch: (search: Record<string, unknown>): { q?: string } => ({
+	validateSearch: (
+		search: Record<string, unknown>,
+	): {
+		q?: string;
+		tab?: "people" | "posts";
+		peoplePage?: number;
+		postsPage?: number;
+	} => ({
 		q: typeof search.q === "string" ? search.q : undefined,
+		tab:
+			search.tab === "people" || search.tab === "posts"
+				? search.tab
+				: undefined,
+		peoplePage:
+			search.peoplePage === undefined
+				? undefined
+				: pageFromSearch(search.peoplePage),
+		postsPage:
+			search.postsPage === undefined
+				? undefined
+				: pageFromSearch(search.postsPage),
 	}),
-	loaderDeps: ({ search }) => ({ q: search.q ?? "" }),
-	loader: ({ deps }) => searchCommunityFn({ data: { query: deps.q } }),
+	loaderDeps: ({ search }) => ({
+		q: search.q ?? "",
+		peoplePage: search.peoplePage ?? 1,
+		postsPage: search.postsPage ?? 1,
+	}),
+	loader: ({ deps }) =>
+		searchCommunityPaginatedFn({
+			data: {
+				query: deps.q,
+				peoplePage: deps.peoplePage,
+				postsPage: deps.postsPage,
+				pageSize: 12,
+			},
+		}),
 	pendingComponent: () => <PagePending cards={2} />,
+	errorComponent: PageError,
 	component: SearchPage,
 });
 
 function SearchPage() {
 	const search = Route.useSearch();
 	const q = search.q ?? "";
-	const { people, posts, query } = Route.useLoaderData();
+	const { people, posts, query, peoplePagination, postsPagination } =
+		Route.useLoaderData();
 	const navigate = Route.useNavigate();
 	const [draft, setDraft] = useState(q);
-	const [tab, setTab] = useState<"people" | "posts">("people");
+	const tab = search.tab ?? "people";
 
 	useEffect(() => {
-		if (people.length === 0 && posts.length > 0) {
-			setTab("posts");
+		if (tab === "people" && people.length === 0 && posts.length > 0) {
+			void navigate({
+				to: "/search",
+				search: { ...search, tab: "posts" },
+				replace: true,
+			});
 		}
-	}, [people.length, posts.length]);
+	}, [navigate, people.length, posts.length, search, tab]);
 
 	function runSearch() {
 		void navigate({
 			to: "/search",
-			search: { q: draft.trim() || undefined },
+			search: {
+				q: draft.trim() || undefined,
+				tab: "people",
+				peoplePage: 1,
+				postsPage: 1,
+			},
 		});
 	}
 
@@ -76,10 +125,21 @@ function SearchPage() {
 					<SegmentedControl
 						layoutId="search-tab"
 						value={tab}
-						onChange={setTab}
+						onChange={(nextTab) =>
+							void navigate({
+								to: "/search",
+								search: { ...search, tab: nextTab },
+							})
+						}
 						options={[
-							{ value: "people", label: `People (${people.length})` },
-							{ value: "posts", label: `Posts (${posts.length})` },
+							{
+								value: "people",
+								label: `People (${peoplePagination.totalItems})`,
+							},
+							{
+								value: "posts",
+								label: `Posts (${postsPagination.totalItems})`,
+							},
 						]}
 					/>
 				</div>
@@ -105,6 +165,25 @@ function SearchPage() {
 									) : null}
 								</Link>
 							))}
+							<div className="sm:col-span-2">
+								<PaginationControls
+									page={peoplePagination.page}
+									totalPages={peoplePagination.totalPages}
+									totalItems={peoplePagination.totalItems}
+									itemLabel="people"
+									onPageChange={(peoplePage) =>
+										void navigate({
+											to: "/search",
+											search: {
+												q: q || undefined,
+												tab,
+												peoplePage,
+												postsPage: search.postsPage ?? 1,
+											},
+										})
+									}
+								/>
+							</div>
 						</div>
 					) : (
 						<div className="mt-6">
@@ -129,6 +208,25 @@ function SearchPage() {
 								personHref={item.userId}
 							/>
 						))}
+						<div className="md:col-span-2">
+							<PaginationControls
+								page={postsPagination.page}
+								totalPages={postsPagination.totalPages}
+								totalItems={postsPagination.totalItems}
+								itemLabel="posts"
+								onPageChange={(postsPage) =>
+									void navigate({
+										to: "/search",
+										search: {
+											q: q || undefined,
+											tab,
+											peoplePage: search.peoplePage ?? 1,
+											postsPage,
+										},
+									})
+								}
+							/>
+						</div>
 					</div>
 				) : (
 					<div className="mt-6">

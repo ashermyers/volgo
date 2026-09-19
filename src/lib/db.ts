@@ -5,6 +5,42 @@ const uri = process.env.MONGODB_URI;
 
 let connected = false;
 let client: MongoClient;
+let indexesReady = false;
+
+async function ensureIndexes(database: Db) {
+	if (indexesReady) return;
+
+	await Promise.all([
+		database
+			.collection("offers")
+			.createIndex({ status: 1, createdAt: -1, _id: -1 }),
+		database
+			.collection("offers")
+			.createIndex({ userId: 1, status: 1, createdAt: -1, _id: -1 }),
+		database
+			.collection("helpRequests")
+			.createIndex({ status: 1, createdAt: -1, _id: -1 }),
+		database
+			.collection("helpRequests")
+			.createIndex({ userId: 1, status: 1, createdAt: -1, _id: -1 }),
+		database
+			.collection("matches")
+			.createIndex({ toUserId: 1, status: 1, createdAt: -1, _id: -1 }),
+		database
+			.collection("matches")
+			.createIndex({ fromUserId: 1, status: 1, createdAt: -1, _id: -1 }),
+		database.collection("matches").createIndex({ postId: 1, status: 1 }),
+		database
+			.collection("profiles")
+			.createIndex({ discoverable: 1, displayName: 1, _id: 1 }),
+		database.collection("exchanges").createIndex({
+			status: 1,
+			verifiedByBoth: 1,
+			providerUserId: 1,
+		}),
+	]);
+	indexesReady = true;
+}
 
 export async function connectToDatabase(): Promise<Db> {
 	if (!uri) {
@@ -25,7 +61,9 @@ export async function connectToDatabase(): Promise<Db> {
 			);
 		}
 	}
-	return client.db("hackathon");
+	const database = client.db("hackathon");
+	await ensureIndexes(database);
+	return database;
 }
 
 export async function parseObjectId(value: string): Promise<ObjectId | null> {

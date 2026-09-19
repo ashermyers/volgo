@@ -6,11 +6,12 @@ const labels: Record<string, string> = {
 	matched: "Matched",
 	completed: "Completed",
 	pending: "Pending",
+	archived: "Archived",
 };
 
 export default function StatusBadge({ status }: { status: string }) {
 	const variant =
-		status === "completed"
+		status === "completed" || status === "archived"
 			? "secondary"
 			: status === "matched"
 				? "default"

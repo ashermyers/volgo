@@ -13,7 +13,7 @@ import {
 } from "#/components/ui/alert-dialog";
 import { Button } from "#/components/ui/button";
 
-export default function DeletePostButton({
+export default function ArchivePostButton({
 	busy,
 	onConfirm,
 }: {
@@ -29,27 +29,26 @@ export default function DeletePostButton({
 					<Button variant="ghost" className="w-full text-muted-foreground" />
 				}
 			>
-				Delete
+				Archive
 			</AlertDialogTrigger>
 			<AlertDialogContent>
 				<AlertDialogHeader>
-					<AlertDialogTitle>Delete this post?</AlertDialogTitle>
+					<AlertDialogTitle>Archive this post?</AlertDialogTitle>
 					<AlertDialogDescription>
-						It will leave the community board. People who already reached out
-						won’t be able to continue from it.
+						It will leave the community board and pending replies will pause.
+						You can restore it later from Archived.
 					</AlertDialogDescription>
 				</AlertDialogHeader>
 				<AlertDialogFooter>
-					<AlertDialogCancel>Keep it</AlertDialogCancel>
+					<AlertDialogCancel>Keep active</AlertDialogCancel>
 					<AlertDialogAction
-						variant="destructive"
 						disabled={busy}
 						onClick={() => {
 							onConfirm();
 							setOpen(false);
 						}}
 					>
-						Delete
+						Archive
 					</AlertDialogAction>
 				</AlertDialogFooter>
 			</AlertDialogContent>

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { intentTypeSchema } from "#/features/intents/schema";
+import { paginationInputSchema } from "#/features/pagination/schema";
 import { privateContactSchema } from "#/features/profiles/schema";
 
 export const communityStatusSchema = z.enum([
@@ -8,6 +9,7 @@ export const communityStatusSchema = z.enum([
 	"open",
 	"matched",
 	"completed",
+	"archived",
 ]);
 
 export const communityPostSchema = z.object({
@@ -28,6 +30,18 @@ export const communityPostSchema = z.object({
 });
 
 export type CommunityPost = z.infer<typeof communityPostSchema>;
+
+export const discoverFeedInputSchema = paginationInputSchema.extend({
+	filter: z.enum(["for-you", "request", "offer", "all"]).default("all"),
+});
+
+export const boardPaginationInputSchema = z.object({
+	postFilter: z.enum(["all", "request", "offer", "archived"]).default("all"),
+	postsPage: z.number().int().min(1).max(10_000).default(1),
+	incomingPage: z.number().int().min(1).max(10_000).default(1),
+	connectionsPage: z.number().int().min(1).max(10_000).default(1),
+	pageSize: paginationInputSchema.shape.pageSize.default(6),
+});
 
 export const expressInterestInputSchema = z.object({
 	postId: z.string().min(1),

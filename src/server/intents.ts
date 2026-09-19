@@ -9,11 +9,11 @@ import {
 	analyzeIntentResultSchema,
 	capturedIntentSchema,
 	deleteIntentInputSchema,
-	type IntentListItem,
 	publishIntentInputSchema,
 } from "#/features/intents/schema";
 import { localAnalyzeIntent } from "#/lib/clarify";
 import { connectToDatabase, parseObjectId } from "#/lib/db";
+import { archiveOwnedIntent, restoreOwnedIntent } from "#/lib/intent-archive";
 import { mergeSkillsIntoProfile } from "#/server/profiles";
 
 const INTENT_SYSTEM_PROMPT = `You help people in VOLGO, a community time-banking service, turn a note into a useful post.
@@ -136,7 +136,7 @@ export const publishIntentFn = createServerFn({ method: "POST" })
 		return { id: result.insertedId.toString(), type: "request" as const };
 	});
 
-export const deleteIntentFn = createServerFn({ method: "POST" })
+export const archiveIntentFn = createServerFn({ method: "POST" })
 	.validator(deleteIntentInputSchema)
 	.handler(async ({ data }) => {
 		const userId = await requireUserId();
@@ -147,107 +147,29 @@ export const deleteIntentFn = createServerFn({ method: "POST" })
 		}
 
 		const database = await connectToDatabase();
-		const collectionName =
-			data.postType === "offer" ? "offers" : "helpRequests";
-		const result = await database.collection(collectionName).deleteOne({
-			_id: postId,
+		return archiveOwnedIntent({
+			database,
+			postId,
+			postType: data.postType,
 			userId,
 		});
+	});
 
-		if (result.deletedCount === 0) {
+export const restoreIntentFn = createServerFn({ method: "POST" })
+	.validator(deleteIntentInputSchema)
+	.handler(async ({ data }) => {
+		const userId = await requireUserId();
+		const postId = await parseObjectId(data.postId);
+
+		if (!postId) {
 			throw new Error("That post could not be found");
 		}
 
-		await database.collection("matches").deleteMany({ postId: data.postId });
-
-		return { ok: true as const };
-	});
-
-export const getMyIntentsFn = createServerFn({ method: "GET" }).handler(
-	async () => {
-		const { isAuthenticated, userId } = await auth();
-
-		if (!isAuthenticated || !userId) {
-			return { isAuthenticated: false, items: [] as IntentListItem[] };
-		}
-
 		const database = await connectToDatabase();
-		const [offers, requests] = await Promise.all([
-			database
-				.collection("offers")
-				.find({ userId })
-				.sort({ createdAt: -1 })
-				.limit(50)
-				.toArray(),
-			database
-				.collection("helpRequests")
-				.find({ userId })
-				.sort({ createdAt: -1 })
-				.limit(50)
-				.toArray(),
-		]);
-
-		const items: IntentListItem[] = [
-			...offers.map((offer) => ({
-				id: offer._id.toString(),
-				type: "offer" as const,
-				title: String(offer.title),
-				description: String(offer.description),
-				skills: Array.isArray(offer.skills)
-					? offer.skills.filter(
-							(skill): skill is string => typeof skill === "string",
-						)
-					: [],
-				minutes:
-					typeof offer.availableMinutes === "number"
-						? offer.availableMinutes
-						: null,
-				availability:
-					typeof offer.availability === "string" ? offer.availability : null,
-				confidence: 1,
-				status:
-					offer.status === "completed" || offer.status === "matched"
-						? offer.status
-						: "active",
-				createdAt:
-					offer.createdAt instanceof Date
-						? offer.createdAt.toISOString()
-						: new Date(offer.createdAt).toISOString(),
-			})),
-			...requests.map((request) => ({
-				id: request._id.toString(),
-				type: "request" as const,
-				title: String(request.title),
-				description: String(request.description),
-				skills: Array.isArray(request.skillsNeeded)
-					? request.skillsNeeded.filter(
-							(skill): skill is string => typeof skill === "string",
-						)
-					: [],
-				minutes:
-					typeof request.estimatedMinutes === "number"
-						? request.estimatedMinutes
-						: null,
-				availability:
-					typeof request.availability === "string"
-						? request.availability
-						: null,
-				confidence: 1,
-				status:
-					request.status === "matched" ||
-					request.status === "completed" ||
-					request.status === "active"
-						? request.status
-						: "open",
-				createdAt:
-					request.createdAt instanceof Date
-						? request.createdAt.toISOString()
-						: new Date(request.createdAt).toISOString(),
-			})),
-		];
-
-		items.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-
-		return { isAuthenticated: true, items };
-	},
-);
+		return restoreOwnedIntent({
+			database,
+			postId,
+			postType: data.postType,
+			userId,
+		});
+	});

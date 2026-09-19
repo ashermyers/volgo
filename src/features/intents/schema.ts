@@ -46,6 +46,6 @@ export const deleteIntentInputSchema = z.object({
 
 export type IntentListItem = CapturedIntent & {
 	id: string;
-	status: "active" | "open" | "matched" | "completed";
+	status: "active" | "open" | "matched" | "completed" | "archived";
 	createdAt: string;
 };
