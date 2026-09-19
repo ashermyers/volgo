@@ -140,13 +140,13 @@ export default function Navigation() {
 							>
 								<Settings className="size-4" />
 							</Button>
-							<UserButton
+							{/* <UserButton
 								appearance={{
 									elements: {
 										avatarBox: "size-9",
 									},
 								}}
-							/>
+							/> */}
 						</Show>
 
 						<Show when="signed-out">
