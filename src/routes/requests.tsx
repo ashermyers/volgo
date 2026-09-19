@@ -1,24 +1,29 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import {
-	ArrowRight,
-	CalendarClock,
-	Clock3,
-	HandHeart,
-	HelpingHand,
-	Inbox,
-	Plus,
-} from "lucide-react";
-import { motion } from "motion/react";
-import { useState } from "react";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { Check, Plus, Sparkles } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { useMemo, useState } from "react";
 
-import Navigation from "#/components/navigation";
-import { Badge } from "#/components/ui/badge";
+import AppShell from "#/components/app-shell";
+import DeletePostButton from "#/components/delete-post-button";
+import OpportunityCard, {
+	EmptyState,
+	SignInPrompt,
+} from "#/components/opportunity-card";
+import PageHeader from "#/components/page-header";
+import PagePending from "#/components/page-pending";
+import SegmentedControl from "#/components/segmented-control";
 import { Button } from "#/components/ui/button";
-import type { IntentListItem } from "#/features/intents/schema";
-import { getMyIntentsFn } from "#/server/intents";
+import type { BoardItem, IncomingInterest } from "#/features/community/schema";
+import {
+	acceptMatchFn,
+	completeMatchFn,
+	getMyBoardFn,
+} from "#/server/community";
+import { deleteIntentFn } from "#/server/intents";
 
 export const Route = createFileRoute("/requests")({
-	loader: () => getMyIntentsFn(),
+	loader: () => getMyBoardFn(),
+	pendingComponent: () => <PagePending cards={2} />,
 	component: RequestsPage,
 });
 
@@ -30,197 +35,262 @@ const filterLabels: Array<{ value: Filter; label: string }> = [
 	{ value: "offer", label: "Help I offered" },
 ];
 
-function formatDate(value: string) {
-	return new Intl.DateTimeFormat("en-US", {
-		month: "short",
-		day: "numeric",
-		year: "numeric",
-	}).format(new Date(value));
-}
-
-function ActivityCard({
-	item,
-	index,
-}: {
-	item: IntentListItem;
-	index: number;
-}) {
-	const isOffer = item.type === "offer";
-
-	return (
-		<motion.article
-			initial={{ opacity: 0, y: 12 }}
-			animate={{ opacity: 1, y: 0 }}
-			transition={{ delay: Math.min(index * 0.05, 0.25) }}
-			className="group rounded-2xl border bg-card p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
-		>
-			<div className="flex items-start justify-between gap-4">
-				<div className="flex min-w-0 items-start gap-3">
-					<div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-						{isOffer ? (
-							<HandHeart className="size-5" />
-						) : (
-							<HelpingHand className="size-5" />
-						)}
-					</div>
-					<div className="min-w-0">
-						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							{isOffer ? "I can help" : "I need help"}
-						</p>
-						<h2 className="mt-1 text-lg font-semibold tracking-tight">
-							{item.title}
-						</h2>
-					</div>
-				</div>
-				<Badge variant={item.status === "completed" ? "secondary" : "outline"}>
-					<span className="capitalize">{item.status}</span>
-				</Badge>
-			</div>
-
-			<p className="mt-4 text-sm leading-6 text-muted-foreground">
-				{item.description}
-			</p>
-
-			<div className="mt-4 flex flex-wrap gap-2">
-				{item.skills.map((skill) => (
-					<Badge key={skill} variant="secondary">
-						{skill}
-					</Badge>
-				))}
-			</div>
-
-			<div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t pt-4 text-xs text-muted-foreground">
-				{item.minutes ? (
-					<span className="flex items-center gap-1.5">
-						<Clock3 className="size-3.5" />
-						{item.minutes} minutes
-					</span>
-				) : null}
-				{item.availability ? (
-					<span className="flex items-center gap-1.5">
-						<CalendarClock className="size-3.5" />
-						{item.availability}
-					</span>
-				) : null}
-				<span className="ml-auto">Posted {formatDate(item.createdAt)}</span>
-			</div>
-		</motion.article>
-	);
-}
-
 function RequestsPage() {
-	const { isAuthenticated, items } = Route.useLoaderData();
+	const { isAuthenticated, items, incoming } = Route.useLoaderData();
+	const router = useRouter();
 	const [filter, setFilter] = useState<Filter>("all");
+	const [busyId, setBusyId] = useState<string | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const [acceptedIds, setAcceptedIds] = useState<Set<string>>(new Set());
+	const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
+
+	const visibleIncoming = useMemo(
+		() => incoming.filter((item) => !acceptedIds.has(item.id)),
+		[acceptedIds, incoming],
+	);
+
 	const filteredItems =
 		filter === "all" ? items : items.filter((item) => item.type === filter);
 
-	return (
-		<div className="min-h-screen bg-background text-foreground">
-			<Navigation />
+	async function accept(item: IncomingInterest) {
+		if (busyId) return;
+		setError(null);
+		setBusyId(item.id);
 
+		try {
+			await acceptMatchFn({ data: { matchId: item.id } });
+			setAcceptedIds((current) => new Set(current).add(item.id));
+			await router.invalidate();
+		} catch {
+			setError("We couldn't accept that yet. Please try again.");
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	async function remove(item: BoardItem) {
+		if (busyId) return;
+		setError(null);
+		setBusyId(item.id);
+
+		try {
+			await deleteIntentFn({
+				data: { postId: item.id, postType: item.type },
+			});
+			await router.invalidate();
+		} catch {
+			setError("We couldn't delete that yet. Please try again.");
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	async function complete(item: BoardItem) {
+		if (!item.acceptedMatchId || busyId) return;
+		setError(null);
+		setBusyId(item.acceptedMatchId);
+
+		try {
+			await completeMatchFn({ data: { matchId: item.acceptedMatchId } });
+			setCompletedIds((current) => new Set(current).add(item.id));
+			await router.invalidate();
+		} catch {
+			setError("We couldn't mark that complete yet. Please try again.");
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	return (
+		<AppShell>
 			<main className="mx-auto w-full max-w-5xl px-6 py-12 sm:py-16">
-				<div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-					<div>
-						<p className="text-sm font-medium text-primary">
-							Your community activity
-						</p>
-						<h1 className="mt-2 font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
-							Requests & offers
-						</h1>
-						<p className="mt-2 max-w-xl text-muted-foreground">
-							Keep track of the help you need and the time you’ve offered.
-						</p>
-					</div>
-					<Button
-						render={<Link to="/" />}
-						nativeButton={false}
-						className="gap-2 self-start sm:self-auto"
-					>
-						<Plus className="size-4" />
-						Create a post
-					</Button>
-				</div>
+				<PageHeader
+					kicker="Your community activity"
+					title="Requests & offers"
+					description="Keep track of the help you need, the time you’ve offered, and the people reaching out."
+					actions={
+						<Button
+							render={<Link to="/" />}
+							nativeButton={false}
+							className="gap-2 self-start sm:self-auto"
+						>
+							<Plus className="size-4" />
+							Create a post
+						</Button>
+					}
+				/>
 
 				{!isAuthenticated ? (
-					<div className="mt-12 flex flex-col items-center rounded-2xl border border-dashed px-6 py-16 text-center">
-						<div className="flex size-12 items-center justify-center rounded-2xl bg-muted">
-							<Inbox className="size-5 text-muted-foreground" />
-						</div>
-						<h2 className="mt-5 text-lg font-semibold">
-							Sign in to see your activity
-						</h2>
-						<p className="mt-2 max-w-sm text-sm text-muted-foreground">
-							Your requests and offers are private to your account until you
-							choose to share them with the community.
-						</p>
-						<Button
-							render={<Link to="/login" />}
-							nativeButton={false}
-							className="mt-5 gap-2"
-						>
-							Sign in
-							<ArrowRight className="size-4" />
-						</Button>
+					<div className="mt-12">
+						<SignInPrompt />
 					</div>
 				) : (
 					<>
-						<div className="mt-10 flex gap-1 overflow-x-auto rounded-xl border bg-muted/40 p-1 sm:w-fit">
-							{filterLabels.map((option) => (
-								<Button
-									key={option.value}
-									variant={filter === option.value ? "secondary" : "ghost"}
-									className={
-										filter === option.value
-											? "bg-background shadow-sm"
-											: "text-muted-foreground"
-									}
-									onClick={() => setFilter(option.value)}
-								>
-									{option.label}
-								</Button>
-							))}
+						{error ? (
+							<p className="mt-6 text-sm text-destructive" role="alert">
+								{error}
+							</p>
+						) : null}
+
+						{visibleIncoming.length > 0 ? (
+							<section className="mt-10">
+								<div className="mb-4 flex items-center gap-2 text-sm font-medium">
+									<Sparkles className="size-4 text-primary" />
+									People reaching out
+								</div>
+								<div className="grid gap-3">
+									<AnimatePresence mode="popLayout">
+										{visibleIncoming.map((item) => (
+											<IncomingCard
+												key={item.id}
+												item={item}
+												busy={busyId === item.id}
+												onAccept={() => void accept(item)}
+											/>
+										))}
+									</AnimatePresence>
+								</div>
+							</section>
+						) : null}
+
+						<div className="mt-10">
+							<SegmentedControl
+								layoutId="requests-filter"
+								value={filter}
+								onChange={setFilter}
+								options={filterLabels}
+							/>
 						</div>
 
 						{filteredItems.length > 0 ? (
 							<div className="mt-6 grid gap-4 md:grid-cols-2">
-								{filteredItems.map((item, index) => (
-									<ActivityCard key={item.id} item={item} index={index} />
-								))}
+								<AnimatePresence mode="popLayout">
+									{filteredItems.map((item, index) => {
+										const done =
+											item.status === "completed" || completedIds.has(item.id);
+										const matched =
+											item.status === "matched" ||
+											Boolean(item.acceptedMatchId);
+
+										return (
+											<OpportunityCard
+												key={item.id}
+												item={{
+													...item,
+													status: done
+														? "completed"
+														: matched
+															? "matched"
+															: item.status,
+												}}
+												index={index}
+												footer={
+													<div className="space-y-3">
+														{item.incomingCount > 0 ? (
+															<p className="text-xs text-muted-foreground">
+																{item.incomingCount}{" "}
+																{item.incomingCount === 1
+																	? "person is"
+																	: "people are"}{" "}
+																reaching out
+															</p>
+														) : null}
+														{item.partnerName && matched ? (
+															<p className="text-xs text-muted-foreground">
+																Matched with {item.partnerName}
+															</p>
+														) : null}
+														{matched && !done && item.acceptedMatchId ? (
+															<Button
+																className="w-full gap-2"
+																disabled={busyId === item.acceptedMatchId}
+																onClick={() => void complete(item)}
+															>
+																<Check className="size-4" />
+																Mark complete
+															</Button>
+														) : null}
+														{!done ? (
+															<DeletePostButton
+																busy={busyId === item.id}
+																onConfirm={() => void remove(item)}
+															/>
+														) : null}
+													</div>
+												}
+											/>
+										);
+									})}
+								</AnimatePresence>
 							</div>
 						) : (
-							<motion.div
-								initial={{ opacity: 0 }}
-								animate={{ opacity: 1 }}
-								className="mt-6 flex flex-col items-center rounded-2xl border border-dashed px-6 py-16 text-center"
-							>
-								<div className="flex size-12 items-center justify-center rounded-2xl bg-muted">
-									<Inbox className="size-5 text-muted-foreground" />
-								</div>
-								<h2 className="mt-5 text-lg font-semibold">
-									{items.length === 0
-										? "Nothing here yet"
-										: "No posts in this view"}
-								</h2>
-								<p className="mt-2 max-w-sm text-sm text-muted-foreground">
-									{items.length === 0
-										? "Describe what you need or what you can offer. VOLGO will turn it into a community-ready post."
-										: "Try another filter to see the rest of your activity."}
-								</p>
-								{items.length === 0 ? (
-									<Button
-										render={<Link to="/" />}
-										nativeButton={false}
-										className="mt-5 gap-2"
-									>
-										Create your first post
-										<ArrowRight className="size-4" />
-									</Button>
-								) : null}
-							</motion.div>
+							<div className="mt-6">
+								<EmptyState
+									title={
+										items.length === 0
+											? "Nothing here yet"
+											: "No posts in this view"
+									}
+									description={
+										items.length === 0
+											? "Describe what you need or what you can offer. VOLGO will turn it into a community-ready post."
+											: "Try another filter to see the rest of your activity."
+									}
+									action={
+										items.length === 0 ? (
+											<Button
+												render={<Link to="/" />}
+												nativeButton={false}
+												className="mt-5 gap-2"
+											>
+												Create your first post
+											</Button>
+										) : null
+									}
+								/>
+							</div>
 						)}
 					</>
 				)}
 			</main>
-		</div>
+		</AppShell>
+	);
+}
+
+function IncomingCard({
+	item,
+	busy,
+	onAccept,
+}: {
+	item: IncomingInterest;
+	busy: boolean;
+	onAccept: () => void;
+}) {
+	return (
+		<motion.article
+			layout
+			initial={{ opacity: 0, y: 10, scale: 0.98 }}
+			animate={{ opacity: 1, y: 0, scale: 1 }}
+			exit={{ opacity: 0, x: 24, scale: 0.98 }}
+			transition={{ type: "spring", stiffness: 320, damping: 28 }}
+			className="flex flex-col gap-4 rounded-2xl border bg-card p-4 sm:flex-row sm:items-center sm:justify-between"
+		>
+			<div className="min-w-0">
+				<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+					{item.postType === "request" ? "Wants to help" : "Could use this"} ·{" "}
+					{item.score} fit
+				</p>
+				<h2 className="mt-1 truncate text-base font-semibold">
+					{item.fromDisplayName}
+				</h2>
+				<p className="mt-1 truncate text-sm text-muted-foreground">
+					{item.postTitle}
+					{item.explanation ? ` — ${item.explanation}` : ""}
+				</p>
+			</div>
+			<Button className="shrink-0 gap-2" disabled={busy} onClick={onAccept}>
+				{busy ? "Matching…" : "Accept"}
+			</Button>
+		</motion.article>
 	);
 }

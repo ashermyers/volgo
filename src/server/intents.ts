@@ -1,23 +1,32 @@
-import { auth } from "@clerk/tanstack-react-start/server";
+import { auth, clerkClient } from "@clerk/tanstack-react-start/server";
 import { chat } from "@tanstack/ai";
 import { createGeminiChat } from "@tanstack/ai-gemini";
 import { createServerFn } from "@tanstack/react-start";
 
 import {
+	type AnalyzeIntentResult,
 	analyzeIntentInputSchema,
+	analyzeIntentResultSchema,
 	capturedIntentSchema,
+	deleteIntentInputSchema,
 	type IntentListItem,
 	publishIntentInputSchema,
 } from "#/features/intents/schema";
-import { connectToDatabase } from "#/lib/db";
+import { localAnalyzeIntent } from "#/lib/clarify";
+import { connectToDatabase, parseObjectId } from "#/lib/db";
+import { mergeSkillsIntoProfile } from "#/server/profiles";
 
-const INTENT_SYSTEM_PROMPT = `You extract a single actionable post for VOLGO, a community time-banking service.
+const INTENT_SYSTEM_PROMPT = `You help people in VOLGO, a community time-banking service, turn a note into a useful post.
 
-Classify the user's message as:
-- "offer" when they are primarily volunteering their own time or skill.
-- "request" when they are primarily asking the community for help.
+Decide:
+- "offer" when they are primarily volunteering time or skill.
+- "request" when they are primarily asking for help.
 
-Write a concise, human title and a faithful first-person description. Keep concrete details from the message. Skills should be short service tags such as "Java", "Moving", "Linux", or "Calculus". Return at most six skills. Set minutes only when the user states or strongly implies a duration; otherwise use null. Preserve their availability in plain language, or use null. Confidence is your confidence in the offer/request classification from 0 to 1. Never invent contact details, credentials, dates, or availability.`;
+If the note is too vague to match well, return status "clarify". Vague means missing the topic/skill, missing whether they need help or can help, or missing a useful constraint such as time, duration, or what specifically is broken/needed. Ask 1-3 short, concrete questions. Do not ask for contact details. Keep note to one or two warm sentences. Leave intent null when clarifying.
+
+If the note is already specific enough to post, or the user already answered your questions, return status "ready" with a complete intent. Write a concise human title and a faithful first-person description. Skills are short tags such as "Java", "Moving", "Linux", or "Calculus" (at most six). Set minutes only when stated or strongly implied; otherwise null. Preserve availability in plain language, or null. Never invent dates, credentials, or contact details. questions should be [] when ready.
+
+If the user asks to post anyway, return ready with the best intent you can from what they already said.`;
 
 function getGeminiAdapter() {
 	const apiKey = process.env.GEMINI_API_KEY;
@@ -39,29 +48,65 @@ async function requireUserId() {
 	return userId;
 }
 
+function normalizeResult(result: AnalyzeIntentResult): AnalyzeIntentResult {
+	if (result.status === "ready") {
+		const intent = capturedIntentSchema.parse(result.intent);
+		return { ...result, intent, questions: [] };
+	}
+
+	if (result.questions.length === 0 && result.intent) {
+		const intent = capturedIntentSchema.parse(result.intent);
+		return { ...result, status: "ready", intent, questions: [] };
+	}
+
+	return { ...result, intent: null };
+}
+
 export const analyzeIntentFn = createServerFn({ method: "POST" })
 	.validator(analyzeIntentInputSchema)
 	.handler(async ({ data }) => {
-		await requireUserId();
+		const forceNote = data.force
+			? "The user chose to post with the details they already gave. Return status ready."
+			: "";
 
-		return chat({
-			adapter: getGeminiAdapter(),
-			messages: [{ role: "user", content: data.prompt }],
-			systemPrompts: [INTENT_SYSTEM_PROMPT],
-			outputSchema: capturedIntentSchema,
-		});
+		try {
+			const result = await chat({
+				adapter: getGeminiAdapter(),
+				messages: data.messages.map((message) => ({
+					role: message.role,
+					content: message.content,
+				})),
+				systemPrompts: [INTENT_SYSTEM_PROMPT, forceNote].filter(Boolean),
+				outputSchema: analyzeIntentResultSchema,
+			});
+
+			return normalizeResult(result);
+		} catch {
+			return localAnalyzeIntent(data.messages, data.force ?? false);
+		}
 	});
 
 export const publishIntentFn = createServerFn({ method: "POST" })
 	.validator(publishIntentInputSchema)
 	.handler(async ({ data }) => {
 		const userId = await requireUserId();
+		const clerkUser = await clerkClient().users.getUser(userId);
+		const displayName =
+			clerkUser.firstName || clerkUser.username || "Community member";
 		const database = await connectToDatabase();
 		const now = new Date();
+
+		await mergeSkillsIntoProfile({
+			userId,
+			displayName,
+			skills: data.intent.skills,
+			availability: data.intent.availability,
+		});
 
 		if (data.intent.type === "offer") {
 			const result = await database.collection("offers").insertOne({
 				userId,
+				displayName,
 				title: data.intent.title,
 				description: data.intent.description,
 				skills: data.intent.skills,
@@ -77,6 +122,7 @@ export const publishIntentFn = createServerFn({ method: "POST" })
 
 		const result = await database.collection("helpRequests").insertOne({
 			userId,
+			displayName,
 			title: data.intent.title,
 			description: data.intent.description,
 			skillsNeeded: data.intent.skills,
@@ -88,6 +134,33 @@ export const publishIntentFn = createServerFn({ method: "POST" })
 		});
 
 		return { id: result.insertedId.toString(), type: "request" as const };
+	});
+
+export const deleteIntentFn = createServerFn({ method: "POST" })
+	.validator(deleteIntentInputSchema)
+	.handler(async ({ data }) => {
+		const userId = await requireUserId();
+		const postId = await parseObjectId(data.postId);
+
+		if (!postId) {
+			throw new Error("That post could not be found");
+		}
+
+		const database = await connectToDatabase();
+		const collectionName =
+			data.postType === "offer" ? "offers" : "helpRequests";
+		const result = await database.collection(collectionName).deleteOne({
+			_id: postId,
+			userId,
+		});
+
+		if (result.deletedCount === 0) {
+			throw new Error("That post could not be found");
+		}
+
+		await database.collection("matches").deleteMany({ postId: data.postId });
+
+		return { ok: true as const };
 	});
 
 export const getMyIntentsFn = createServerFn({ method: "GET" }).handler(

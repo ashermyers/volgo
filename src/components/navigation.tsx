@@ -4,47 +4,99 @@ import {
 	SignUpButton,
 	UserButton,
 } from "@clerk/tanstack-react-start";
-import { useNavigate } from "@tanstack/react-router";
-import { Clock3, Menu } from "lucide-react";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { CircleUser, Clock3, Menu, Search, Settings } from "lucide-react";
+import { motion } from "motion/react";
+
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { cn } from "@/lib/utils";
+
+const links = [
+	{ to: "/discover", label: "Discover" },
+	{ to: "/requests", label: "Requests" },
+	{ to: "/impact", label: "Impact" },
+] as const;
 
 export default function Navigation() {
 	const navigate = useNavigate();
+	const pathname = useRouterState({
+		select: (state) => state.location.pathname,
+	});
 
 	return (
-		<header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur">
+		<header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-xl">
 			<div className="mx-auto grid h-16 max-w-7xl grid-cols-[1fr_auto_1fr] items-center px-6">
-				{/* Left */}
 				<div className="flex items-center justify-start">
-					<a href="/" className="flex items-center gap-2 font-semibold">
+					<Link
+						to="/"
+						className="flex items-center gap-2.5 font-heading text-[15px] font-semibold tracking-tight"
+					>
 						<div className="flex size-8 items-center justify-center rounded-lg bg-foreground text-background">
 							<Clock3 className="size-4" />
 						</div>
-
 						<span>VOLGO</span>
-					</a>
+					</Link>
 				</div>
 
-				{/* Center */}
 				<nav className="hidden items-center justify-center gap-1 md:flex">
-					<a href="/discover" className={buttonVariants({ variant: "ghost" })}>
-						Discover
-					</a>
+					{links.map((link) => {
+						const active = pathname === link.to;
 
-					<a href="/requests" className={buttonVariants({ variant: "ghost" })}>
-						Requests
-					</a>
-
-					<a href="/impact" className={buttonVariants({ variant: "ghost" })}>
-						Impact
-					</a>
+						return (
+							<Link
+								key={link.to}
+								to={link.to}
+								className={cn(
+									buttonVariants({ variant: "ghost" }),
+									"relative",
+									active ? "text-foreground" : "text-muted-foreground",
+								)}
+							>
+								{active ? (
+									<motion.span
+										layoutId="nav-pill"
+										className="absolute inset-0 rounded-lg bg-muted"
+										transition={{ type: "spring", stiffness: 420, damping: 34 }}
+									/>
+								) : null}
+								<span className="relative z-10">{link.label}</span>
+							</Link>
+						);
+					})}
 				</nav>
 
-				{/* Right */}
-				<div className="flex items-center justify-end gap-3">
-					<div className="hidden items-center gap-3 md:flex">
+				<div className="flex items-center justify-end gap-2">
+					<div className="hidden items-center gap-2 md:flex">
+						<Button
+							size="icon"
+							variant="ghost"
+							render={<Link to="/search" />}
+							nativeButton={false}
+							aria-label="Search"
+						>
+							<Search className="size-4" />
+						</Button>
+
 						<Show when="signed-in">
+							<Button
+								size="icon"
+								variant="ghost"
+								render={<Link to="/profile" />}
+								nativeButton={false}
+								aria-label="Profile"
+							>
+								<CircleUser className="size-4" />
+							</Button>
+							<Button
+								size="icon"
+								variant="ghost"
+								render={<Link to="/settings" />}
+								nativeButton={false}
+								aria-label="Settings"
+							>
+								<Settings className="size-4" />
+							</Button>
 							<UserButton
 								appearance={{
 									elements: {
@@ -58,7 +110,7 @@ export default function Navigation() {
 							<Button
 								variant="ghost"
 								onClick={() => {
-									navigate({ to: "/login" });
+									void navigate({ to: "/login" });
 								}}
 							>
 								Sign in
@@ -66,7 +118,7 @@ export default function Navigation() {
 
 							<Button
 								onClick={() => {
-									navigate({ to: "/login" });
+									void navigate({ to: "/login" });
 								}}
 							>
 								Get started
@@ -82,35 +134,65 @@ export default function Navigation() {
 
 							<SheetContent>
 								<div className="mt-8 flex flex-col gap-2">
-									<a
-										href="/discover"
-										className={buttonVariants({
-											variant: "ghost",
-											className: "justify-start",
-										})}
+									{links.map((link) => (
+										<Link
+											key={link.to}
+											to={link.to}
+											className={cn(
+												buttonVariants({
+													variant: "ghost",
+													className: "justify-start",
+												}),
+												pathname === link.to
+													? "bg-muted text-foreground"
+													: "text-muted-foreground",
+											)}
+										>
+											{link.label}
+										</Link>
+									))}
+									<Link
+										to="/search"
+										className={cn(
+											buttonVariants({
+												variant: "ghost",
+												className: "justify-start",
+											}),
+											pathname === "/search"
+												? "bg-muted text-foreground"
+												: "text-muted-foreground",
+										)}
 									>
-										Discover
-									</a>
-
-									<a
-										href="/requests"
-										className={buttonVariants({
-											variant: "ghost",
-											className: "justify-start",
-										})}
+										Search
+									</Link>
+									<Link
+										to="/profile"
+										className={cn(
+											buttonVariants({
+												variant: "ghost",
+												className: "justify-start",
+											}),
+											pathname === "/profile"
+												? "bg-muted text-foreground"
+												: "text-muted-foreground",
+										)}
 									>
-										Requests
-									</a>
-
-									<a
-										href="/impact"
-										className={buttonVariants({
-											variant: "ghost",
-											className: "justify-start",
-										})}
+										Profile
+									</Link>
+									<Link
+										to="/settings"
+										className={cn(
+											buttonVariants({
+												variant: "ghost",
+												className: "justify-start",
+											}),
+											pathname === "/settings"
+												? "bg-muted text-foreground"
+												: "text-muted-foreground",
+										)}
 									>
-										Impact
-									</a>
+										Settings
+									</Link>
 
 									<div className="my-2 border-t" />
 
@@ -123,7 +205,6 @@ export default function Navigation() {
 													},
 												}}
 											/>
-
 											<span className="text-sm font-medium">Account</span>
 										</div>
 									</Show>

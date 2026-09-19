@@ -1,6 +1,5 @@
 import { auth, clerkClient } from "@clerk/tanstack-react-start/server";
-import { useChat } from "@tanstack/ai-react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import {
 	ArrowRight,
@@ -10,19 +9,25 @@ import {
 	Clock3,
 	HandHeart,
 	HelpingHand,
+	MessageCircleQuestion,
 	RotateCcw,
 	Sparkles,
-	Square,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
-import Navigation from "#/components/navigation";
+import AppShell from "#/components/app-shell";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
+import { Skeleton } from "#/components/ui/skeleton";
 import { Textarea } from "#/components/ui/textarea";
-import type { CapturedIntent } from "#/features/intents/schema";
-import { chatFn } from "#/server/chat";
+import type { CommunityPost } from "#/features/community/schema";
+import type {
+	CapturedIntent,
+	ConversationMessage,
+} from "#/features/intents/schema";
+import { localAnalyzeIntent } from "#/lib/clarify";
+import { getDiscoverFeedFn } from "#/server/community";
 import { analyzeIntentFn, publishIntentFn } from "#/server/intents";
 
 const authStateFn = createServerFn().handler(async () => {
@@ -39,10 +44,15 @@ const authStateFn = createServerFn().handler(async () => {
 export const Route = createFileRoute("/")({
 	component: Home,
 	beforeLoad: () => authStateFn(),
-	loader: async ({ context }) => ({
-		userId: context.userId,
-		firstName: context.firstName,
-	}),
+	loader: async ({ context }) => {
+		const feed = await getDiscoverFeedFn();
+
+		return {
+			userId: context.userId,
+			firstName: context.firstName,
+			pulse: feed.items.slice(0, 3),
+		};
+	},
 });
 
 function getFriendlyError(error: unknown, fallback: string) {
@@ -60,18 +70,17 @@ function Suggestion({
 	children,
 	onClick,
 }: {
-	children: React.ReactNode;
+	children: ReactNode;
 	onClick: () => void;
 }) {
 	return (
-		<Button
-			variant="outline"
-			size="sm"
-			className="rounded-full bg-background/70 text-muted-foreground shadow-none backdrop-blur hover:text-foreground"
+		<button
+			type="button"
+			className="rounded-full border bg-background/70 px-3 py-1.5 text-sm text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
 			onClick={onClick}
 		>
 			{children}
-		</Button>
+		</button>
 	);
 }
 
@@ -90,6 +99,7 @@ function IntentPreview({
 
 	return (
 		<motion.section
+			layoutId="intent-panel"
 			initial={{ opacity: 0, y: 16, scale: 0.98 }}
 			animate={{ opacity: 1, y: 0, scale: 1 }}
 			exit={{ opacity: 0, y: 8, scale: 0.98 }}
@@ -169,40 +179,246 @@ function IntentPreview({
 	);
 }
 
+function OrganizingCard({ note }: { note: string }) {
+	return (
+		<motion.section
+			layoutId="intent-panel"
+			initial={{ opacity: 0, y: 12 }}
+			animate={{ opacity: 1, y: 0 }}
+			exit={{ opacity: 0, y: 8 }}
+			className="overflow-hidden rounded-2xl border bg-card p-5 shadow-md shadow-foreground/5"
+			aria-live="polite"
+		>
+			<div className="flex items-center gap-3">
+				<div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+					<Sparkles className="size-4 animate-pulse" />
+				</div>
+				<div>
+					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+						Reading your note
+					</p>
+					<p className="text-sm font-medium">Organizing the details…</p>
+				</div>
+			</div>
+			{note ? (
+				<p className="mt-4 text-sm leading-6 text-muted-foreground">{note}</p>
+			) : (
+				<div className="mt-5 space-y-2">
+					<Skeleton className="h-3 w-full" />
+					<Skeleton className="h-3 w-4/5" />
+					<Skeleton className="h-3 w-2/3" />
+				</div>
+			)}
+			<div className="mt-5 flex gap-2">
+				<Skeleton className="h-5 w-16 rounded-full" />
+				<Skeleton className="h-5 w-20 rounded-full" />
+				<Skeleton className="h-5 w-14 rounded-full" />
+			</div>
+		</motion.section>
+	);
+}
+
+function ClarifyingCard({
+	note,
+	questions,
+	onSkip,
+}: {
+	note: string;
+	questions: string[];
+	onSkip: () => void;
+}) {
+	return (
+		<motion.section
+			layoutId="intent-panel"
+			initial={{ opacity: 0, y: 12 }}
+			animate={{ opacity: 1, y: 0 }}
+			exit={{ opacity: 0, y: 8 }}
+			className="overflow-hidden rounded-2xl border bg-card shadow-md shadow-foreground/5"
+			aria-live="polite"
+		>
+			<div className="flex items-center gap-3 border-b px-5 py-4">
+				<div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+					<MessageCircleQuestion className="size-4" />
+				</div>
+				<div>
+					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+						A couple of details
+					</p>
+					<p className="text-sm font-medium">
+						Help us make this easier to match
+					</p>
+				</div>
+			</div>
+			<div className="p-5">
+				<p className="text-sm leading-6 text-muted-foreground">{note}</p>
+				<ol className="mt-4 space-y-2">
+					{questions.map((question, index) => (
+						<li
+							key={question}
+							className="rounded-xl border bg-muted/30 px-4 py-3 text-sm leading-6"
+						>
+							<span className="mr-2 text-xs font-medium text-muted-foreground">
+								{index + 1}
+							</span>
+							{question}
+						</li>
+					))}
+				</ol>
+			</div>
+			<div className="flex justify-end border-t bg-muted/30 px-5 py-3">
+				<Button variant="ghost" size="sm" onClick={onSkip}>
+					Post with what I have
+				</Button>
+			</div>
+		</motion.section>
+	);
+}
+
+function PublishedCard({ intent }: { intent: CapturedIntent }) {
+	const isOffer = intent.type === "offer";
+
+	return (
+		<motion.section
+			layoutId="intent-panel"
+			className="overflow-hidden rounded-2xl border bg-card p-6 text-center shadow-lg shadow-foreground/5"
+		>
+			<div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+				<Check className="size-5" />
+			</div>
+			<h2 className="mt-4 text-xl font-semibold tracking-tight">
+				{isOffer ? "Your offer is live" : "Your request is live"}
+			</h2>
+			<p className="mt-2 text-sm text-muted-foreground">
+				Looking for people in the community who fit {intent.title.toLowerCase()}
+				.
+			</p>
+		</motion.section>
+	);
+}
+
+function PulseList({ items }: { items: CommunityPost[] }) {
+	if (items.length === 0) return null;
+
+	return (
+		<motion.section
+			initial={{ opacity: 0, y: 10 }}
+			animate={{ opacity: 1, y: 0 }}
+			transition={{ delay: 0.2 }}
+			className="mt-16"
+		>
+			<div className="mb-4 flex items-end justify-between gap-4">
+				<div>
+					<p className="text-sm font-medium">Happening nearby</p>
+					<p className="text-xs text-muted-foreground">
+						A quiet look at what the community is exchanging.
+					</p>
+				</div>
+				<Button
+					render={<Link to="/discover" />}
+					nativeButton={false}
+					variant="ghost"
+					size="sm"
+					className="gap-1"
+				>
+					Discover
+					<ArrowRight className="size-3.5" />
+				</Button>
+			</div>
+			<div className="divide-y rounded-2xl border bg-card/70">
+				{items.map((item) => (
+					<Link
+						key={item.id}
+						to="/discover"
+						className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/40"
+					>
+						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+							{item.type === "offer" ? (
+								<HandHeart className="size-4" />
+							) : (
+								<HelpingHand className="size-4" />
+							)}
+						</div>
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-sm font-medium">{item.title}</p>
+							<p className="truncate text-xs text-muted-foreground">
+								{item.displayName}
+								{item.skills[0] ? ` · ${item.skills[0]}` : ""}
+							</p>
+						</div>
+						{typeof item.matchScore === "number" ? (
+							<span className="text-xs font-medium tabular-nums text-muted-foreground">
+								{item.matchScore}
+							</span>
+						) : null}
+					</Link>
+				))}
+			</div>
+		</motion.section>
+	);
+}
+
 function Home() {
 	const [prompt, setPrompt] = useState("");
+	const [history, setHistory] = useState<ConversationMessage[]>([]);
+	const [clarifying, setClarifying] = useState<{
+		note: string;
+		questions: string[];
+	} | null>(null);
 	const [draft, setDraft] = useState<CapturedIntent | null>(null);
+	const [published, setPublished] = useState<CapturedIntent | null>(null);
+	const [workingNote, setWorkingNote] = useState("");
 	const [isAnalyzing, setIsAnalyzing] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const state = Route.useLoaderData();
 	const navigate = useNavigate();
 
-	const { messages, sendMessage, isLoading, stop } = useChat({
-		fetcher: ({ messages: nextMessages }, { signal }) =>
-			chatFn({ data: { messages: nextMessages }, signal }),
-	});
-
-	async function submitPrompt() {
-		const value = prompt.trim();
-
-		if (!value || isLoading || isAnalyzing) return;
-
-		if (!state.userId) {
-			await navigate({ to: "/login" });
-			return;
-		}
-
+	async function analyze(messages: ConversationMessage[], force = false) {
 		setError(null);
 		setDraft(null);
-		setIsAnalyzing(true);
-		sendMessage(value);
-		setPrompt("");
+
+		const optimistic = localAnalyzeIntent(messages, force);
+		if (optimistic.status === "clarify") {
+			setClarifying({
+				note: optimistic.note,
+				questions: optimistic.questions,
+			});
+			setIsAnalyzing(false);
+		} else {
+			setClarifying(null);
+			setIsAnalyzing(true);
+			setWorkingNote("");
+		}
 
 		try {
-			const intent = await analyzeIntentFn({ data: { prompt: value } });
-			setDraft(intent);
+			const result = await analyzeIntentFn({ data: { messages, force } });
+			setWorkingNote(result.note);
+			setHistory([...messages, { role: "assistant", content: result.note }]);
+
+			if (result.status === "ready" && result.intent) {
+				setClarifying(null);
+				setDraft(result.intent);
+				return;
+			}
+
+			setClarifying({
+				note: result.note,
+				questions: result.questions,
+			});
 		} catch (caughtError) {
+			if (optimistic.status === "ready" && optimistic.intent) {
+				setDraft(optimistic.intent);
+				return;
+			}
+
+			if (optimistic.status === "clarify") {
+				setClarifying({
+					note: optimistic.note,
+					questions: optimistic.questions,
+				});
+				return;
+			}
+
 			setError(
 				getFriendlyError(
 					caughtError,
@@ -214,15 +430,44 @@ function Home() {
 		}
 	}
 
+	async function submitPrompt(nextPrompt?: string) {
+		const value = (nextPrompt ?? prompt).trim();
+
+		if (!value || isAnalyzing || published) return;
+
+		setPrompt("");
+		const messages: ConversationMessage[] = [
+			...history,
+			{ role: "user", content: value },
+		];
+		setHistory(messages);
+		await analyze(messages);
+	}
+
+	async function skipQuestions() {
+		if (history.length === 0 || isAnalyzing) return;
+		await analyze(history, true);
+	}
+
 	async function publishIntent() {
 		if (!draft || isSaving) return;
+
+		if (!state.userId) {
+			await navigate({ to: "/login" });
+			return;
+		}
 
 		setError(null);
 		setIsSaving(true);
 
 		try {
 			await publishIntentFn({ data: { intent: draft } });
-			await navigate({ to: "/requests" });
+			setPublished(draft);
+			setDraft(null);
+			setClarifying(null);
+			window.setTimeout(() => {
+				void navigate({ to: "/discover" });
+			}, 900);
 		} catch (caughtError) {
 			setError(
 				getFriendlyError(
@@ -236,18 +481,17 @@ function Home() {
 
 	function resetDraft() {
 		setDraft(null);
+		setClarifying(null);
+		setHistory([]);
+		setWorkingNote("");
 		setError(null);
 	}
 
-	const isWorking = isLoading || isAnalyzing;
+	const isWorking = isAnalyzing;
 
 	return (
-		<div className="min-h-screen bg-background text-foreground">
-			<Navigation />
-
+		<AppShell>
 			<main className="relative mx-auto flex min-h-[calc(100vh-4rem)] max-w-5xl flex-col items-center px-6 py-14 sm:py-20">
-				<div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-80 bg-[radial-gradient(ellipse_at_top,var(--primary)/8%,transparent_62%)]" />
-
 				<div className="w-full max-w-3xl">
 					<motion.div
 						initial={{ opacity: 0, y: 12 }}
@@ -260,7 +504,7 @@ function Home() {
 							</div>
 						</div>
 
-						<h1 className="font-heading text-4xl font-semibold tracking-tight sm:text-5xl">
+						<h1 className="font-heading text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
 							{state.firstName
 								? `How can we help, ${state.firstName}?`
 								: "How can we help?"}
@@ -270,50 +514,6 @@ function Home() {
 							We’ll organize the details.
 						</p>
 					</motion.div>
-
-					<AnimatePresence initial={false} mode="popLayout">
-						{messages.length > 0 ? (
-							<motion.div
-								initial={{ opacity: 0, height: 0 }}
-								animate={{ opacity: 1, height: "auto" }}
-								className="mb-4 space-y-3"
-							>
-								{messages.map((message) => (
-									<div
-										key={message.id}
-										className={
-											message.role === "user"
-												? "flex justify-end"
-												: "flex justify-start"
-										}
-									>
-										<div
-											className={
-												message.role === "user"
-													? "max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-3 text-sm leading-6 text-primary-foreground"
-													: "max-w-[85%] rounded-2xl rounded-bl-md bg-muted px-4 py-3 text-sm leading-6 text-foreground"
-											}
-										>
-											{message.parts
-												.flatMap((part) =>
-													part.type === "text" ? [part.content] : [],
-												)
-												.join("")}
-										</div>
-									</div>
-								))}
-
-								{isWorking ? (
-									<div className="flex justify-start">
-										<div className="flex items-center gap-2 rounded-2xl rounded-bl-md bg-muted px-4 py-3 text-sm text-muted-foreground">
-											<Sparkles className="size-4 animate-pulse" />
-											Organizing the details…
-										</div>
-									</div>
-								) : null}
-							</motion.div>
-						) : null}
-					</AnimatePresence>
 
 					<div className="rounded-2xl border bg-card p-2 shadow-md shadow-foreground/5 transition-shadow focus-within:shadow-lg">
 						<Textarea
@@ -325,42 +525,37 @@ function Home() {
 									void submitPrompt();
 								}
 							}}
-							placeholder="I need help moving a desk this afternoon…"
+							placeholder={
+								clarifying
+									? "Answer in your own words…"
+									: "I need help moving a desk this afternoon…"
+							}
 							className="min-h-28 resize-none border-0 bg-transparent px-4 py-3 text-base shadow-none focus-visible:ring-0"
 							aria-label="Describe what you need or how you can help"
+							disabled={Boolean(published)}
 						/>
 
 						<div className="flex items-center justify-between px-2 pb-1">
 							<div className="flex items-center gap-2 text-xs text-muted-foreground">
 								<Sparkles className="size-3.5" />
-								VOLGO understands the details
+								{clarifying
+									? "Answer below, then send"
+									: "VOLGO understands the details"}
 							</div>
 
-							{isLoading ? (
-								<Button
-									size="icon"
-									variant="secondary"
-									className="rounded-xl"
-									onClick={stop}
-									aria-label="Stop response"
-								>
-									<Square className="size-4 fill-current" />
-								</Button>
-							) : (
-								<Button
-									size="icon"
-									className="rounded-xl"
-									disabled={!prompt.trim() || isAnalyzing}
-									onClick={() => void submitPrompt()}
-									aria-label="Send"
-								>
-									<ArrowUp className="size-4" />
-								</Button>
-							)}
+							<Button
+								size="icon"
+								className="rounded-xl"
+								disabled={!prompt.trim() || isAnalyzing || Boolean(published)}
+								onClick={() => void submitPrompt()}
+								aria-label="Send"
+							>
+								<ArrowUp className="size-4" />
+							</Button>
 						</div>
 					</div>
 
-					{messages.length === 0 ? (
+					{!draft && !isWorking && !published && !clarifying ? (
 						<motion.div
 							initial={{ opacity: 0 }}
 							animate={{ opacity: 1 }}
@@ -368,32 +563,34 @@ function Home() {
 							className="mt-4 flex flex-wrap justify-center gap-2"
 						>
 							<Suggestion
-								onClick={() =>
-									setPrompt("I need help studying for calculus this week.")
-								}
+								onClick={() => void submitPrompt("I want to help someone.")}
 							>
-								Help me study
+								I want to help
 							</Suggestion>
 							<Suggestion
 								onClick={() =>
-									setPrompt("I have an hour free and want to help someone.")
+									void submitPrompt("I need help with something this week.")
 								}
 							>
-								I have an hour to give
+								I need help
 							</Suggestion>
 							<Suggestion
 								onClick={() =>
-									setPrompt("I need someone to help me move something.")
-								}
-							>
-								Help me move
-							</Suggestion>
-							<Suggestion
-								onClick={() =>
-									setPrompt("I can help someone with Java or Linux.")
+									void submitPrompt(
+										"I can help someone with Java or Linux for about two hours Saturday afternoon.",
+									)
 								}
 							>
 								Offer programming help
+							</Suggestion>
+							<Suggestion
+								onClick={() =>
+									void submitPrompt(
+										"I need someone to help me move a desk this afternoon.",
+									)
+								}
+							>
+								Help me move
 							</Suggestion>
 						</motion.div>
 					) : null}
@@ -412,15 +609,31 @@ function Home() {
 						</motion.div>
 					) : null}
 
-					<AnimatePresence>
-						{draft ? (
-							<div className="mt-6">
+					<AnimatePresence mode="wait">
+						{published ? (
+							<div className="mt-6" key="published">
+								<PublishedCard intent={published} />
+							</div>
+						) : draft ? (
+							<div className="mt-6" key="draft">
 								<IntentPreview
 									intent={draft}
 									isSaving={isSaving}
 									onReset={resetDraft}
 									onPublish={() => void publishIntent()}
 								/>
+							</div>
+						) : clarifying && !isWorking ? (
+							<div className="mt-6" key="clarify">
+								<ClarifyingCard
+									note={clarifying.note}
+									questions={clarifying.questions}
+									onSkip={() => void skipQuestions()}
+								/>
+							</div>
+						) : isWorking ? (
+							<div className="mt-6" key="organizing">
+								<OrganizingCard note={workingNote} />
 							</div>
 						) : null}
 					</AnimatePresence>
@@ -438,8 +651,12 @@ function Home() {
 							</Button>
 						</p>
 					) : null}
+
+					{!draft && !isWorking && !published && !clarifying ? (
+						<PulseList items={state.pulse} />
+					) : null}
 				</div>
 			</main>
-		</div>
+		</AppShell>
 	);
 }

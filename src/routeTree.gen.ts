@@ -10,14 +10,30 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DiscoverRouteImport } from './routes/discover'
+import { Route as ImpactRouteImport } from './routes/impact'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as RequestsRouteImport } from './routes/requests'
+import { Route as SearchRouteImport } from './routes/search'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as SsoCallbackRouteImport } from './routes/sso-callback'
+import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DiscoverRoute = DiscoverRouteImport.update({
+  id: '/discover',
+  path: '/discover',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ImpactRoute = ImpactRouteImport.update({
+  id: '/impact',
+  path: '/impact',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -25,9 +41,24 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProfileRoute = ProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RequestsRoute = RequestsRouteImport.update({
   id: '/requests',
   path: '/requests',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SearchRoute = SearchRouteImport.update({
+  id: '/search',
+  path: '/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignupRoute = SignupRouteImport.update({
@@ -40,43 +71,106 @@ const SsoCallbackRoute = SsoCallbackRouteImport.update({
   path: '/sso-callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const UsersUserIdRoute = UsersUserIdRouteImport.update({
+  id: '/users/$userId',
+  path: '/users/$userId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/discover': typeof DiscoverRoute
+  '/impact': typeof ImpactRoute
   '/login': typeof LoginRoute
+  '/profile': typeof ProfileRoute
   '/requests': typeof RequestsRoute
+  '/search': typeof SearchRoute
+  '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/sso-callback': typeof SsoCallbackRoute
+  '/users/$userId': typeof UsersUserIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/discover': typeof DiscoverRoute
+  '/impact': typeof ImpactRoute
   '/login': typeof LoginRoute
+  '/profile': typeof ProfileRoute
   '/requests': typeof RequestsRoute
+  '/search': typeof SearchRoute
+  '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/sso-callback': typeof SsoCallbackRoute
+  '/users/$userId': typeof UsersUserIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/discover': typeof DiscoverRoute
+  '/impact': typeof ImpactRoute
   '/login': typeof LoginRoute
+  '/profile': typeof ProfileRoute
   '/requests': typeof RequestsRoute
+  '/search': typeof SearchRoute
+  '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/sso-callback': typeof SsoCallbackRoute
+  '/users/$userId': typeof UsersUserIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/requests' | '/signup' | '/sso-callback'
+  fullPaths:
+    | '/'
+    | '/discover'
+    | '/impact'
+    | '/login'
+    | '/profile'
+    | '/requests'
+    | '/search'
+    | '/settings'
+    | '/signup'
+    | '/sso-callback'
+    | '/users/$userId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/requests' | '/signup' | '/sso-callback'
-  id: '__root__' | '/' | '/login' | '/requests' | '/signup' | '/sso-callback'
+  to:
+    | '/'
+    | '/discover'
+    | '/impact'
+    | '/login'
+    | '/profile'
+    | '/requests'
+    | '/search'
+    | '/settings'
+    | '/signup'
+    | '/sso-callback'
+    | '/users/$userId'
+  id:
+    | '__root__'
+    | '/'
+    | '/discover'
+    | '/impact'
+    | '/login'
+    | '/profile'
+    | '/requests'
+    | '/search'
+    | '/settings'
+    | '/signup'
+    | '/sso-callback'
+    | '/users/$userId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DiscoverRoute: typeof DiscoverRoute
+  ImpactRoute: typeof ImpactRoute
   LoginRoute: typeof LoginRoute
+  ProfileRoute: typeof ProfileRoute
   RequestsRoute: typeof RequestsRoute
+  SearchRoute: typeof SearchRoute
+  SettingsRoute: typeof SettingsRoute
   SignupRoute: typeof SignupRoute
   SsoCallbackRoute: typeof SsoCallbackRoute
+  UsersUserIdRoute: typeof UsersUserIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -88,6 +182,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/discover': {
+      id: '/discover'
+      path: '/discover'
+      fullPath: '/discover'
+      preLoaderRoute: typeof DiscoverRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/impact': {
+      id: '/impact'
+      path: '/impact'
+      fullPath: '/impact'
+      preLoaderRoute: typeof ImpactRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
@@ -95,11 +203,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/profile': {
+      id: '/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof ProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/requests': {
       id: '/requests'
       path: '/requests'
       fullPath: '/requests'
       preLoaderRoute: typeof RequestsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/search': {
+      id: '/search'
+      path: '/search'
+      fullPath: '/search'
+      preLoaderRoute: typeof SearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signup': {
@@ -116,15 +245,28 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SsoCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/users/$userId': {
+      id: '/users/$userId'
+      path: '/users/$userId'
+      fullPath: '/users/$userId'
+      preLoaderRoute: typeof UsersUserIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DiscoverRoute: DiscoverRoute,
+  ImpactRoute: ImpactRoute,
   LoginRoute: LoginRoute,
+  ProfileRoute: ProfileRoute,
   RequestsRoute: RequestsRoute,
+  SearchRoute: SearchRoute,
+  SettingsRoute: SettingsRoute,
   SignupRoute: SignupRoute,
   SsoCallbackRoute: SsoCallbackRoute,
+  UsersUserIdRoute: UsersUserIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

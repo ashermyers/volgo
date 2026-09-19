@@ -14,12 +14,34 @@ export const capturedIntentSchema = z.object({
 
 export type CapturedIntent = z.infer<typeof capturedIntentSchema>;
 
-export const analyzeIntentInputSchema = z.object({
-	prompt: z.string().trim().min(8).max(600),
+export const conversationMessageSchema = z.object({
+	role: z.enum(["user", "assistant"]),
+	content: z.string().trim().min(1).max(800),
 });
+
+export type ConversationMessage = z.infer<typeof conversationMessageSchema>;
+
+export const analyzeIntentInputSchema = z.object({
+	messages: z.array(conversationMessageSchema).min(1).max(12),
+	force: z.boolean().optional(),
+});
+
+export const analyzeIntentResultSchema = z.object({
+	status: z.enum(["clarify", "ready"]),
+	note: z.string().trim().min(8).max(400),
+	questions: z.array(z.string().trim().min(4).max(140)).max(3),
+	intent: capturedIntentSchema.nullable(),
+});
+
+export type AnalyzeIntentResult = z.infer<typeof analyzeIntentResultSchema>;
 
 export const publishIntentInputSchema = z.object({
 	intent: capturedIntentSchema,
+});
+
+export const deleteIntentInputSchema = z.object({
+	postId: z.string().min(1),
+	postType: intentTypeSchema,
 });
 
 export type IntentListItem = CapturedIntent & {
