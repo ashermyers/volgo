@@ -121,7 +121,7 @@ export default function OpportunityCard({
 					</Badge>
 				))}
 			</div>
-
+<br />
 			<div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-2 border-t pt-4 text-xs text-muted-foreground">
 				{item.minutes ? (
 					<span className="flex items-center gap-1.5">
