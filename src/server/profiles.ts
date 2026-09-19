@@ -210,7 +210,9 @@ export const getPublicProfileFn = createServerFn({ method: "GET" })
 
 		return {
 			...profile,
-			displayName: postName || profile.displayName,
+			displayName: document
+				? profile.displayName
+				: postName || profile.displayName,
 			skills: unique([...profile.skills, ...postSkills]),
 			isSelf,
 			recentTitles: [...offers, ...requests]
@@ -323,6 +325,9 @@ export const searchCommunityFn = createServerFn({ method: "POST" })
 		]);
 
 		const peopleById = new Map<string, UserProfile>();
+		const savedProfileIds = new Set(
+			profiles.map((profile) => String(profile.clerkUserId)),
+		);
 
 		for (const profile of profiles) {
 			const id = String(profile.clerkUserId);
@@ -344,7 +349,9 @@ export const searchCommunityFn = createServerFn({ method: "POST" })
 			peopleById.set(id, {
 				...current,
 				displayName:
-					typeof item.displayName === "string" && item.displayName.trim()
+					!savedProfileIds.has(id) &&
+					typeof item.displayName === "string" &&
+					item.displayName.trim()
 						? item.displayName
 						: current.displayName,
 				skills: unique([...current.skills, ...extraSkills]),

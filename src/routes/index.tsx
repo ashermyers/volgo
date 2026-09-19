@@ -14,7 +14,7 @@ import {
 	Sparkles,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 
 import AppShell from "#/components/app-shell";
 import { Badge } from "#/components/ui/badge";
@@ -370,10 +370,12 @@ function Home() {
 	const [isAnalyzing, setIsAnalyzing] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const analysisVersion = useRef(0);
 	const state = Route.useLoaderData();
 	const navigate = useNavigate();
 
 	async function analyze(messages: ConversationMessage[], force = false) {
+		const version = ++analysisVersion.current;
 		setError(null);
 		setDraft(null);
 
@@ -392,6 +394,8 @@ function Home() {
 
 		try {
 			const result = await analyzeIntentFn({ data: { messages, force } });
+			if (version !== analysisVersion.current) return;
+
 			setWorkingNote(result.note);
 			setHistory([...messages, { role: "assistant", content: result.note }]);
 
@@ -406,6 +410,8 @@ function Home() {
 				questions: result.questions,
 			});
 		} catch (caughtError) {
+			if (version !== analysisVersion.current) return;
+
 			if (optimistic.status === "ready" && optimistic.intent) {
 				setDraft(optimistic.intent);
 				return;
@@ -426,7 +432,9 @@ function Home() {
 				),
 			);
 		} finally {
-			setIsAnalyzing(false);
+			if (version === analysisVersion.current) {
+				setIsAnalyzing(false);
+			}
 		}
 	}
 
@@ -480,6 +488,7 @@ function Home() {
 	}
 
 	function resetDraft() {
+		analysisVersion.current += 1;
 		setDraft(null);
 		setClarifying(null);
 		setHistory([]);
