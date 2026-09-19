@@ -13,7 +13,7 @@ export default function SiteFooter() {
 			<div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_bottom,var(--primary)/8%,transparent_55%)]" />
 			<div className="relative mx-auto max-w-7xl px-6 pt-16 pb-10 sm:pt-20">
 	
-				<img src="https://storage.volgo.org/ASAAi.png" alt="ASAAi" className="mt-2 h-20 w-auto dark:invert" />
+				<img src="https://storage.volgo.org/ASAAi.png" alt="ASAAi" className="mt-2 h-10 w-auto dark:invert" />
 
 				{/* <p
 					aria-label="ASAAi"
@@ -25,7 +25,7 @@ export default function SiteFooter() {
 					</span>
 				</p> */}
 
-				<div className="mt-8 flex flex-col gap-6 border-t border-foreground/10 pt-6 sm:mt-10 sm:flex-row sm:items-end sm:justify-between ml-4">
+				<div className="mt-8 flex flex-col gap-6 border-t border-foreground/10 pt-6 sm:mt-10 sm:flex-row sm:items-end sm:justify-between ml-2">
 					<div className="max-w-md">
 						<p className="font-heading text-lg font-medium tracking-tight text-balance sm:text-xl">
 							VOLGO was designed and built by ASAAi.
@@ -52,7 +52,7 @@ export default function SiteFooter() {
 					</nav>
 				</div>
 
-				<p className="mt-10 text-[11px] tracking-[0.28em] text-muted-foreground uppercase ml-4">
+				<p className="mt-10 text-[11px] tracking-[0.28em] text-muted-foreground uppercase ml-2">
 					© {new Date().getFullYear()} ASAAi
 				</p>
 			</div>
