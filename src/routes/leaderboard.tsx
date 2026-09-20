@@ -3,6 +3,7 @@ import { Clock3, Medal, Trophy } from "lucide-react";
 import { motion } from "motion/react";
 
 import AppShell from "#/components/app-shell";
+import LeaderboardPodium from "#/components/leaderboard-podium";
 import { EmptyState } from "#/components/opportunity-card";
 import PageError from "#/components/page-error";
 import PageHeader from "#/components/page-header";
@@ -44,6 +45,13 @@ function rankStyle(rank: number) {
 function LeaderboardPage() {
 	const { entries, pagination } = Route.useLoaderData();
 	const navigate = Route.useNavigate();
+	const showPodium = pagination.page === 1;
+	const podiumEntries = showPodium
+		? entries.filter((entry) => entry.rank <= 3)
+		: [];
+	const listEntries = showPodium
+		? entries.filter((entry) => entry.rank > 3)
+		: entries;
 
 	return (
 		<AppShell>
@@ -60,11 +68,22 @@ function LeaderboardPage() {
 				/>
 
 				{entries.length > 0 ? (
-					<div className="mt-10 space-y-3">
-						{entries.map((entry, index) => (
-							<LeaderboardRow key={entry.userId} entry={entry} index={index} />
-						))}
-						<p className="pt-3 text-center text-xs text-muted-foreground">
+					<div className="mt-10 space-y-8">
+						{podiumEntries.length > 0 ? (
+							<LeaderboardPodium entries={podiumEntries} />
+						) : null}
+						{listEntries.length > 0 ? (
+							<div className="space-y-3">
+								{listEntries.map((entry, index) => (
+									<LeaderboardRow
+										key={entry.userId}
+										entry={entry}
+										index={index}
+									/>
+								))}
+							</div>
+						) : null}
+						<p className="pt-1 text-center text-xs text-muted-foreground">
 							Rankings use only service time confirmed by both participants.
 						</p>
 						<PaginationControls

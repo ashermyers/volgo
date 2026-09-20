@@ -799,8 +799,15 @@ function Home() {
 
 	return (
 		<AppShell>
-			<main className="relative mx-auto flex min-h-[calc(100vh-4rem)] max-w-5xl flex-col items-center px-6 py-14 sm:py-20">
-				<div className="w-full max-w-3xl">
+			<div className="relative isolate overflow-hidden">
+				<img
+					src="https://storage.volgo.org/YARN%20BACKGROUND.png"
+					alt=""
+					aria-hidden="true"
+					className="pointer-events-none absolute top-0 left-1/2 z-0 w-[min(1920px,160vw)] max-w-none -translate-x-1/2 select-none [mask-image:linear-gradient(to_bottom,black_70%,transparent)]"
+				/>
+				<main className="relative z-10 mx-auto flex min-h-[calc(100vh-4rem)] max-w-5xl flex-col items-center px-6 py-14 sm:py-20">
+					<div className="w-full max-w-3xl">
 					<motion.div
 						initial={{ opacity: 0, y: 12 }}
 						animate={{ opacity: 1, y: 0 }}
@@ -1018,8 +1025,9 @@ function Home() {
 							/>
 						</>
 					) : null}
-				</div>
-			</main>
+					</div>
+				</main>
+			</div>
 		</AppShell>
 	);
 }
