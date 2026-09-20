@@ -546,8 +546,8 @@ function IntentModePicker({
             >
               {option.icon}
             </div>
-            <p className="text-sm font-semibold">{option.title}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="text-lg font-semibold">{option.title}</p>
+            <p className="mt-1 text-base text-muted-foreground">
               {option.description}
             </p>
           </button>

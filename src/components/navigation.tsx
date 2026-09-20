@@ -54,7 +54,7 @@ function ThemeToggle({ mobile = false }: { mobile?: boolean }) {
 			aria-label={label}
 			title={label}
 		>
-			{isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+			{isDark ? <Sun className="size-5" /> : <Moon className="size-5" />}
 			{mobile ? <span>{isDark ? "Light mode" : "Dark mode"}</span> : null}
 		</Button>
 	);
@@ -67,14 +67,14 @@ export default function Navigation() {
 	});
 
 	return (
-		<header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-xl">
+		<header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-xl mt-1">
 			<div className="mx-auto grid h-16 max-w-7xl grid-cols-[1fr_auto_1fr] items-center px-6">
 				<div className="flex items-center justify-start">
 					<Link
 						to="/"
 						className="flex items-center gap-2.5 font-heading text-[15px] font-semibold tracking-tight"
 					>
-						<img src="https://storage.volgo.org/VOLGO.png" alt="VOLGO" className="h-13 w-auto" />
+						<img src="https://storage.volgo.org/VOLGO.png" alt="VOLGO" className="h-15 w-auto mt-1" />
 					</Link>
 				</div>
 
@@ -99,7 +99,7 @@ export default function Navigation() {
 										transition={{ type: "spring", stiffness: 420, damping: 34 }}
 									/>
 								) : null}
-								<span className="relative z-10">{link.label}</span>
+								<span className="relative z-10 text-base">{link.label}</span>
 							</Link>
 						);
 					})}
@@ -118,7 +118,7 @@ export default function Navigation() {
 							nativeButton={false}
 							aria-label="Search"
 						>
-							<Search className="size-4" />
+							<Search className="size-5" />
 						</Button>
 
 						<Show when="signed-in">
@@ -129,7 +129,7 @@ export default function Navigation() {
 								nativeButton={false}
 								aria-label="Profile"
 							>
-								<CircleUser className="size-4" />
+								<CircleUser className="size-5" />
 							</Button>
 							{/* <Button
 								size="icon"
@@ -138,7 +138,7 @@ export default function Navigation() {
 								nativeButton={false}
 								aria-label="Settings"
 							>
-								<Settings className="size-4" />
+								<Settings className="size-5" />
 							</Button> */}
 							{/* <UserButton
 								appearance={{

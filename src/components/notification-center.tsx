@@ -48,7 +48,7 @@ export default function NotificationCenter() {
 				}
 			>
 				<span className="relative">
-					<Bell className="size-4" />
+					<Bell className="size-5" />
 					{unreadCount > 0 ? (
 						<span className="absolute -top-1.5 -right-1.5 flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
 							{unreadCount > 9 ? "9+" : unreadCount}
