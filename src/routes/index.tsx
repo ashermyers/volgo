@@ -807,9 +807,9 @@ function Home() {
 						className="mb-8 text-center"
 					>
 						<div className="mb-5 flex justify-center">
-							<div className="flex size-11 items-center justify-center rounded-2xl border bg-card shadow-sm">
-								<HandHeart className="size-5 text-primary" />
-							</div>
+								<img src="https://storage.volgo.org/CATHATON.png" alt="CATHATON" className="h-20 w-auto dark:hidden" />
+                <img src="https://storage.volgo.org/CATHATON%20(1).png" alt="CATHATON" className="h-20 w-auto dark:block hidden" />
+
 						</div>
 
 						<h1 className="font-heading text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
