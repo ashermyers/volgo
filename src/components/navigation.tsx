@@ -131,7 +131,7 @@ export default function Navigation() {
 							>
 								<CircleUser className="size-4" />
 							</Button>
-							<Button
+							{/* <Button
 								size="icon"
 								variant="ghost"
 								render={<Link to="/settings" />}
@@ -139,7 +139,7 @@ export default function Navigation() {
 								aria-label="Settings"
 							>
 								<Settings className="size-4" />
-							</Button>
+							</Button> */}
 							{/* <UserButton
 								appearance={{
 									elements: {
@@ -223,7 +223,7 @@ export default function Navigation() {
 									>
 										Profile
 									</Link>
-									<Link
+									{/* <Link
 										to="/settings"
 										className={cn(
 											buttonVariants({
@@ -236,7 +236,7 @@ export default function Navigation() {
 										)}
 									>
 										Settings
-									</Link>
+									</Link> */}
 
 									<div className="my-2 border-t" />
 
