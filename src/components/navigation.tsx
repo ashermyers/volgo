@@ -78,7 +78,7 @@ export default function Navigation() {
 					</Link>
 				</div>
 
-				<nav className="hidden items-center justify-center gap-1 md:flex">
+				<nav className="hidden items-center justify-center gap-1 md:flex space-x-4">
 					{links.map((link) => {
 						const active = pathname === link.to;
 
@@ -99,7 +99,7 @@ export default function Navigation() {
 										transition={{ type: "spring", stiffness: 420, damping: 34 }}
 									/>
 								) : null}
-								<span className="relative z-10 text-base">{link.label}</span>
+								<span className="relative z-10 text-base font-medium tracking-wide">{link.label}</span>
 							</Link>
 						);
 					})}

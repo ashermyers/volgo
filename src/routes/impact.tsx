@@ -52,7 +52,7 @@ function ImpactPage() {
 			<main className="mx-auto w-full max-w-5xl px-6 py-12 sm:py-16">
 				<PageHeader
 					kicker="Ut Prosim"
-					title="Your impact"
+					title="See your impact"
 					description="A record of time both people verified, neighbors reached, and skills put in service of others."
 				/>
 
