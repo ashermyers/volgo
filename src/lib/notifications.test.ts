@@ -187,6 +187,28 @@ describe("mapNotification", () => {
 				createdAt: "2026-09-19T16:00:00.000Z",
 			}).type,
 		).toBe("post_published");
+		expect(
+			mapNotification({
+				_id: { toString: () => "n7" },
+				type: "request_fulfilled",
+				title: "Your request was fulfilled",
+				body: "Send a thank-you.",
+				href: "/requests",
+				entityId: "fulfilled:1",
+				createdAt: "2026-09-19T17:00:00.000Z",
+			}).type,
+		).toBe("request_fulfilled");
+		expect(
+			mapNotification({
+				_id: { toString: () => "n8" },
+				type: "thank_you_received",
+				title: "A thank-you from Asher",
+				body: "You made this so much easier.",
+				href: "/requests",
+				entityId: "thankyou:1",
+				createdAt: "2026-09-19T18:00:00.000Z",
+			}).type,
+		).toBe("thank_you_received");
 	});
 });
 

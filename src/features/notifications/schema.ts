@@ -5,6 +5,8 @@ export const notificationTypeSchema = z.enum([
 	"match_accepted",
 	"hours_confirmed",
 	"exchange_completed",
+	"request_fulfilled",
+	"thank_you_received",
 	"post_published",
 	"post_updated",
 	"post_withdrawn",

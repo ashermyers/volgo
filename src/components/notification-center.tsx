@@ -11,6 +11,7 @@ import {
 	PopoverTrigger,
 } from "#/components/ui/popover";
 import { useLiveNotifications } from "#/hooks/use-live-notifications";
+import { fireThankYou, thankYouFromNotification } from "#/lib/celebrations";
 import { markNotificationsReadFn } from "#/server/notifications";
 
 function formatWhen(value: string) {
@@ -93,6 +94,18 @@ export default function NotificationCenter() {
 									}`}
 									onClick={() => {
 										setOpen(false);
+										if (item.type === "thank_you_received") {
+											const { fromName, message } = thankYouFromNotification(
+												item.title,
+												item.body,
+											);
+											fireThankYou({
+												fromName,
+												message,
+												entityId: item.entityId,
+												replay: true,
+											});
+										}
 										if (!item.readAt) void markRead([item.id]);
 									}}
 								>

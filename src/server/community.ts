@@ -14,6 +14,7 @@ import {
 	type LeaderboardEntry,
 	matchActionInputSchema,
 	type SolanaAudit,
+	sendThankYouInputSchema,
 } from "#/features/community/schema";
 import {
 	paginationInputSchema,
@@ -29,6 +30,7 @@ import {
 	ensureSolanaAudit,
 	getSolanaAuditPublicConfig,
 } from "#/lib/solana-audit";
+import { sanitizeThankYouMessage } from "#/lib/thank-you";
 
 type UserContext = {
 	offerSkills: string[];
@@ -48,6 +50,19 @@ function asNullableNumber(value: unknown) {
 
 function asNullableString(value: unknown) {
 	return typeof value === "string" ? value : null;
+}
+
+function thankYouFields(match: Document) {
+	const thankYou =
+		match.thankYou && typeof match.thankYou === "object"
+			? (match.thankYou as Record<string, unknown>)
+			: null;
+	const message =
+		typeof thankYou?.message === "string" ? thankYou.message.trim() : "";
+	return {
+		thankYouSent: message.length > 0,
+		thankYouMessage: message.length > 0 ? message : null,
+	};
 }
 
 function toIsoDate(value: unknown) {
@@ -985,6 +1000,7 @@ export const getMyBoardFn = createServerFn({ method: "GET" }).handler(
 							match.status === "completed" &&
 							bothVerified &&
 							post.status !== "archived",
+						...thankYouFields(match),
 						audit: mapSolanaAudit(
 							exchangesByMatchId.get(match._id.toString())?.audit,
 						),
@@ -1300,6 +1316,7 @@ export const getMyBoardPaginatedFn = createServerFn({ method: "GET" })
 							match.status === "completed" &&
 							bothVerified &&
 							post.status !== "archived",
+						...thankYouFields(match),
 						audit: mapSolanaAudit(
 							exchangesByMatchId.get(match._id.toString())?.audit,
 						),
@@ -1460,22 +1477,136 @@ export const completeMatchFn = createServerFn({ method: "POST" })
 					entityId: `hours:${match._id.toString()}:${userId}`,
 				});
 			} else if (result.status === "completed") {
-				await Promise.all(
-					[partnerId, userId].map((recipientId) =>
-						createNotification(database, {
-							userId: recipientId,
-							actorUserId: userId,
-							type: "exchange_completed",
-							title: "Both people verified the hours",
-							body: `“${postTitle}” is complete and ready to archive.`,
-							href: "/requests",
-							entityId: `completed:${match._id.toString()}:${recipientId}`,
-						}),
-					),
-				);
+				const providerUserId =
+					postType === "request"
+						? String(match.fromUserId)
+						: String(match.toUserId);
+				const recipientUserId =
+					postType === "request"
+						? String(match.toUserId)
+						: String(match.fromUserId);
+				const helperNames = await namesFor([providerUserId]);
+				const helperName = helperNames.get(providerUserId) ?? "Someone";
+				if (postType === "request") {
+					await createNotification(database, {
+						userId: recipientUserId,
+						actorUserId: providerUserId,
+						type: "request_fulfilled",
+						title: "Your request was fulfilled",
+						body: `“${postTitle}” is complete. You can send ${helperName} a thank-you.`,
+						href: "/requests",
+						entityId: `fulfilled:${match._id.toString()}`,
+					});
+					await createNotification(database, {
+						userId: providerUserId,
+						actorUserId: userId,
+						type: "exchange_completed",
+						title: "Both people verified the hours",
+						body: `“${postTitle}” is complete and ready to archive.`,
+						href: "/requests",
+						entityId: `completed:${match._id.toString()}:${providerUserId}`,
+					});
+				} else {
+					await Promise.all(
+						[partnerId, userId].map((notifyUserId) =>
+							createNotification(database, {
+								userId: notifyUserId,
+								actorUserId: userId,
+								type: "exchange_completed",
+								title: "Both people verified the hours",
+								body: `“${postTitle}” is complete and ready to archive.`,
+								href: "/requests",
+								entityId: `completed:${match._id.toString()}:${notifyUserId}`,
+							}),
+						),
+					);
+				}
 			}
 		}
 		return { ...result, audit };
+	});
+
+export const sendThankYouFn = createServerFn({ method: "POST" })
+	.validator(sendThankYouInputSchema)
+	.handler(async ({ data }) => {
+		const { isAuthenticated, userId } = await auth();
+		if (!isAuthenticated || !userId) {
+			throw new Error("You must be signed in to continue");
+		}
+
+		const message = sanitizeThankYouMessage(data.message);
+		if (message.length < 2) {
+			throw new Error("Write a short note first.");
+		}
+
+		const matchId = await parseObjectId(data.matchId);
+		if (!matchId) throw new Error("That match could not be found");
+
+		const database = await connectToDatabase();
+		const match = await database.collection("matches").findOne({
+			_id: matchId,
+			status: "completed",
+			$or: [{ fromUserId: userId }, { toUserId: userId }],
+		});
+		if (!match) throw new Error("That completed match could not be found");
+
+		const confirmedBy = asStringArray(match.confirmedBy);
+		if (
+			!confirmedBy.includes(String(match.fromUserId)) ||
+			!confirmedBy.includes(String(match.toUserId))
+		) {
+			throw new Error("Both people must verify the exchange first");
+		}
+
+		const existing = thankYouFields(match);
+		if (existing.thankYouSent) {
+			throw new Error("A thank-you was already sent for this match");
+		}
+
+		const postType: IntentKind =
+			match.postType === "offer" ? "offer" : "request";
+		const providerUserId =
+			postType === "request"
+				? String(match.fromUserId)
+				: String(match.toUserId);
+		const recipientUserId =
+			postType === "request"
+				? String(match.toUserId)
+				: String(match.fromUserId);
+
+		if (userId !== recipientUserId) {
+			throw new Error("Only the person who received help can send a thank-you");
+		}
+
+		const now = new Date();
+		await database.collection("matches").updateOne(
+			{ _id: matchId, "thankYou.message": { $exists: false } },
+			{
+				$set: {
+					thankYou: {
+						message,
+						fromUserId: userId,
+						toUserId: providerUserId,
+						sentAt: now,
+					},
+					updatedAt: now,
+				},
+			},
+		);
+
+		const names = await namesFor([userId]);
+		const actorName = names.get(userId) ?? "Someone";
+		await createNotification(database, {
+			userId: providerUserId,
+			actorUserId: userId,
+			type: "thank_you_received",
+			title: `A thank-you from ${actorName}`,
+			body: message,
+			href: "/requests",
+			entityId: `thankyou:${match._id.toString()}`,
+		});
+
+		return { sent: true as const };
 	});
 
 export const archiveCompletedPostFn = createServerFn({ method: "POST" })

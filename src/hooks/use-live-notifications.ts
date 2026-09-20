@@ -2,6 +2,11 @@ import { useRouter } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { NotificationItem } from "#/features/notifications/schema";
+import {
+	fireRequestFulfilled,
+	fireThankYou,
+	thankYouFromNotification,
+} from "#/lib/celebrations";
 import { notificationRefreshEvent, notifyToast } from "#/lib/notify-toast";
 import { getNotificationInboxFn } from "#/server/notifications";
 
@@ -45,6 +50,23 @@ export function useLiveNotifications(enabled: boolean) {
 
 				for (const item of fresh) {
 					if (item.type === "post_published") continue;
+					if (item.type === "request_fulfilled") {
+						const matchId = item.entityId.replace(/^fulfilled:/, "");
+						fireRequestFulfilled(matchId);
+						continue;
+					}
+					if (item.type === "thank_you_received") {
+						const { fromName, message } = thankYouFromNotification(
+							item.title,
+							item.body,
+						);
+						fireThankYou({
+							fromName,
+							message,
+							entityId: item.entityId,
+						});
+						continue;
+					}
 					notifyToast({
 						type: item.type === "exchange_completed" ? "success" : "info",
 						title: item.title,

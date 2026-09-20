@@ -26,12 +26,14 @@ import PagePending from "#/components/page-pending";
 import PaginationControls from "#/components/pagination-controls";
 import SegmentedControl from "#/components/segmented-control";
 import SolanaAuditStatus from "#/components/solana-audit-status";
+import ThankYouDialog from "#/components/thank-you-dialog";
 import { Button } from "#/components/ui/button";
 import type {
 	ActiveConnection,
 	BoardItem,
 	IncomingInterest,
 } from "#/features/community/schema";
+import { fireRequestFulfilled, fireThankYou } from "#/lib/celebrations";
 import { notifyToast } from "#/lib/notify-toast";
 import {
 	acceptMatchFn,
@@ -39,6 +41,7 @@ import {
 	completeMatchFn,
 	getMyBoardPaginatedFn,
 	retrySolanaAuditFn,
+	sendThankYouFn,
 } from "#/server/community";
 import {
 	archiveIntentFn,
@@ -258,10 +261,20 @@ function RequestsPage() {
 			const result = await completeMatchFn({
 				data: { matchId: connection.id },
 			});
+			if (
+				result.status === "completed" &&
+				connection.postType === "request" &&
+				connection.role === "recipient"
+			) {
+				fireRequestFulfilled(connection.id);
+			}
 			notifyToast({
 				title:
 					result.status === "completed"
-						? "Hours verified"
+						? connection.postType === "request" &&
+							connection.role === "recipient"
+							? "Request fulfilled"
+							: "Hours verified"
 						: "Waiting on your partner",
 				description:
 					result.status === "completed"
@@ -292,6 +305,25 @@ function RequestsPage() {
 			setError(
 				"We couldn't publish that Solana receipt yet. Please try again.",
 			);
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	async function sendThankYou(connection: ActiveConnection, message: string) {
+		if (busyId) return;
+		setError(null);
+		setBusyId(connection.id);
+		try {
+			await sendThankYouFn({ data: { matchId: connection.id, message } });
+			notifyToast({
+				title: "Thank-you sent",
+				description: `${connection.partnerName} will get your note.`,
+			});
+			await router.invalidate();
+		} catch {
+			setError("We couldn't send that thank-you yet. Please try again.");
+			throw new Error("send-failed");
 		} finally {
 			setBusyId(null);
 		}
@@ -398,6 +430,17 @@ function RequestsPage() {
 											onConfirm={() => void complete(connection)}
 											onRetryAudit={() => void retryAudit(connection)}
 											onArchive={() => void archiveCompleted(connection)}
+											onThankYou={(message) =>
+												sendThankYou(connection, message)
+											}
+											onOpenThankYou={() =>
+												fireThankYou({
+													fromName: connection.partnerName,
+													message: connection.thankYouMessage ?? "",
+													entityId: `thankyou:${connection.id}`,
+													replay: true,
+												})
+											}
 										/>
 									))}
 								</div>
@@ -573,12 +616,16 @@ function ConnectionCard({
 	onConfirm,
 	onRetryAudit,
 	onArchive,
+	onThankYou,
+	onOpenThankYou,
 }: {
 	connection: ActiveConnection;
 	busy: boolean;
 	onConfirm: () => void;
 	onRetryAudit: () => void;
 	onArchive: () => void;
+	onThankYou: (message: string) => Promise<void>;
+	onOpenThankYou: () => void;
 }) {
 	const completed = connection.status === "completed";
 	const verifiedByBoth =
@@ -650,6 +697,29 @@ function ConnectionCard({
 							busy={busy}
 							onRetry={onRetryAudit}
 						/>
+						{connection.role === "recipient" ? (
+							connection.thankYouSent ? (
+								<p className="text-sm text-muted-foreground">
+									Thank-you sent to {connection.partnerName}.
+								</p>
+							) : (
+								<ThankYouDialog
+									connection={connection}
+									busy={busy}
+									onSend={onThankYou}
+								/>
+							)
+						) : connection.thankYouSent ? (
+							<Button
+								variant="outline"
+								size="sm"
+								className="w-full gap-2"
+								onClick={onOpenThankYou}
+							>
+								<Mail className="size-4" aria-hidden="true" />
+								Open thank-you
+							</Button>
+						) : null}
 						{verifiedByBoth ? (
 							<Button
 								variant="outline"

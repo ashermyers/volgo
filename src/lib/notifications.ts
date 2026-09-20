@@ -1,8 +1,9 @@
 import type { Db } from "mongodb";
 
-import type {
-	NotificationItem,
-	NotificationType,
+import {
+	type NotificationItem,
+	type NotificationType,
+	notificationTypeSchema,
 } from "#/features/notifications/schema";
 
 export type NotificationWrite = {
@@ -26,19 +27,10 @@ export function mapNotification(document: {
 	readAt?: unknown;
 	createdAt?: unknown;
 }): NotificationItem {
+	const parsedType = notificationTypeSchema.safeParse(document.type);
 	return {
 		id: document._id.toString(),
-		type:
-			document.type === "interest_received" ||
-			document.type === "match_accepted" ||
-			document.type === "hours_confirmed" ||
-			document.type === "exchange_completed" ||
-			document.type === "post_published" ||
-			document.type === "post_updated" ||
-			document.type === "post_withdrawn" ||
-			document.type === "interest_withdrawn"
-				? document.type
-				: "interest_received",
+		type: parsedType.success ? parsedType.data : "interest_received",
 		title: typeof document.title === "string" ? document.title : "Update",
 		body: typeof document.body === "string" ? document.body : "",
 		href: typeof document.href === "string" ? document.href : "/requests",

@@ -6,7 +6,7 @@ import {
 	Scripts,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
-
+import CelebrationOverlay from "#/components/celebration-overlay";
 import { Toaster } from "#/components/ui/toast";
 import { getOnboardingStatusFn } from "#/server/profiles";
 
@@ -61,7 +61,10 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			</head>
 			<body className="antialiased">
 				<ClerkProvider>
-					<Toaster>{children}</Toaster>
+					<Toaster>
+						{children}
+						<CelebrationOverlay />
+					</Toaster>
 					<TanStackDevtools
 						config={{
 							position: "bottom-right",

@@ -126,7 +126,14 @@ export const activeConnectionSchema = z.object({
 	partnerConfirmed: z.boolean(),
 	role: z.enum(["provider", "recipient"]),
 	canArchivePost: z.boolean(),
+	thankYouSent: z.boolean(),
+	thankYouMessage: z.string().nullable(),
 	audit: solanaAuditSchema.nullable(),
+});
+
+export const sendThankYouInputSchema = z.object({
+	matchId: z.string().min(1),
+	message: z.string().trim().min(2).max(280),
 });
 
 export type ActiveConnection = z.infer<typeof activeConnectionSchema>;

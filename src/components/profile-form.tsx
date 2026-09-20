@@ -23,12 +23,6 @@ function initials(name: string) {
 		.join("");
 }
 
-function formatHours(minutes: number) {
-	if (minutes <= 0) return "0 hrs";
-	const hours = minutes / 60;
-	return `${hours >= 10 ? Math.round(hours) : hours.toFixed(1)} hrs`;
-}
-
 export default function ProfileForm({
 	profile,
 	contact,
