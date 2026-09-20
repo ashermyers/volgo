@@ -253,25 +253,7 @@ export default function ProfileForm({
 							</p>
 						)}
 
-						<dl className="mt-6 grid grid-cols-2 gap-3">
-							<div className="rounded-2xl border bg-muted/40 px-3 py-3">
-								<dt className="text-[11px] tracking-[0.18em] text-muted-foreground uppercase">
-									Hours given
-								</dt>
-								<dd className="mt-1 font-heading text-xl font-semibold tabular-nums">
-									{formatHours(profile.lifetimeMinutes)}
-								</dd>
-							</div>
-							<div className="rounded-2xl border bg-muted/40 px-3 py-3">
-								<dt className="text-[11px] tracking-[0.18em] text-muted-foreground uppercase">
-									Credits
-								</dt>
-								<dd className="mt-1 font-heading text-xl font-semibold tabular-nums">
-									{profile.availableCredits}
-								</dd>
-							</div>
-						</dl>
-
+		
 						<Button
 							render={
 								<Link

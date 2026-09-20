@@ -772,7 +772,7 @@ function Home() {
 			setDraft(null);
 			setClarifying(null);
 			window.setTimeout(() => {
-				void navigate({ to: "/discover" });
+				void navigate({ to: "/requests" });
 			}, 900);
 		} catch (caughtError) {
 			setError(
